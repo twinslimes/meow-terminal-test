@@ -21,6 +21,14 @@ def display_day_trader_section(ticker):
     """Display live trading chart with predictions."""
     st.header(f"Live Day Trading Analysis - {ticker}")
     
+    # Check if we're displaying data for a different ticker than the one in session state
+    if 'day_trader_ticker' in st.session_state and st.session_state.day_trader_ticker != ticker:
+        # Clear day trader session data when ticker changes
+        clear_day_trader_state()
+    
+    # Store current ticker in session state
+    st.session_state.day_trader_ticker = ticker
+    
     # Initialize session state for tracking data
     if 'live_data' not in st.session_state:
         st.session_state.live_data = None
@@ -87,7 +95,20 @@ def display_day_trader_section(ticker):
             # Use the regular reload mechanism
             st.success("Data and predictions updated!")
             time.sleep(1)  # Give a moment for the success message to show
-            st.empty()  # Clear the success message
+            st.rerun()  # Force rerun to refresh all components
+
+def clear_day_trader_state():
+    """Clear day trader session state when ticker changes."""
+    keys_to_clear = [
+        'live_data', 'last_update_time', 'prediction_model', 'predictions',
+        'prediction_upper', 'prediction_lower', 'prediction_confidence',
+        'prediction_time', 'prediction_accuracy', 'model_params',
+        'intraday_data', 'daily_data', 'current_price'
+    ]
+    
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 def fetch_live_data(ticker):
     """Fetch live intraday data for the selected ticker."""
@@ -493,6 +514,13 @@ def generate_price_predictions(ticker, model_type, horizon, num_sims):
         # Check if we have data to work with
         if 'intraday_data' not in st.session_state or st.session_state.intraday_data is None:
             st.error("No intraday data available for prediction.")
+            return
+        
+        # Verify we're using data for the correct ticker
+        if 'day_trader_ticker' in st.session_state and st.session_state.day_trader_ticker != ticker:
+            st.error(f"Data is for {st.session_state.day_trader_ticker}, not {ticker}. Please fetch new data.")
+            clear_day_trader_state()
+            st.rerun()
             return
         
         # Get current price

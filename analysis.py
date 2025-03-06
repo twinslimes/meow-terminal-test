@@ -11,6 +11,12 @@ def display_stock_analysis_section(ticker):
     """Display stock price and volume analysis."""
     st.header("Stock Price and Volume Analysis")
     
+    # Check if we have data for the correct ticker
+    if 'stock_data' in st.session_state and st.session_state.stock_data:
+        if st.session_state.stock_data.ticker != ticker:
+            st.info(f"Current analysis is for {st.session_state.stock_data.ticker}, not {ticker}. Please fetch data for {ticker}.")
+            return
+    
     if 'additional_data' not in st.session_state or st.session_state.additional_data is None:
         st.info(f"Please fetch data for {ticker} to view stock analysis.")
         return
@@ -18,6 +24,11 @@ def display_stock_analysis_section(ticker):
     additional_data = st.session_state.additional_data
     
     if additional_data and 'history' in additional_data and not additional_data['history'].empty:
+        # Verify data is for the correct ticker
+        if 'stock_data' in st.session_state and st.session_state.stock_data.ticker != ticker:
+            st.warning(f"The analysis data is for {st.session_state.stock_data.ticker}, not {ticker}. Please fetch data for {ticker}.")
+            return
+            
         # Display volume analysis
         volume_fig = display_volume_analysis(st.session_state.technical_indicators)
         st.plotly_chart(volume_fig, use_container_width=True)
@@ -124,6 +135,12 @@ def display_stock_analysis_section(ticker):
 def display_technical_indicators_section(ticker):
     """Display technical indicators and charts."""
     st.header("Technical Indicators")
+    
+    # Check if we have data for the correct ticker
+    if 'stock_data' in st.session_state and st.session_state.stock_data:
+        if st.session_state.stock_data.ticker != ticker:
+            st.info(f"Current analysis is for {st.session_state.stock_data.ticker}, not {ticker}. Please fetch data for {ticker}.")
+            return
     
     if 'technical_indicators' not in st.session_state or st.session_state.technical_indicators is None:
         st.info(f"Please fetch data for {ticker} to view technical indicators.")
@@ -298,6 +315,12 @@ def display_fundamentals(fundamentals, ticker):
 def display_fundamental_analysis_section(ticker):
     """Display fundamental analysis data."""
     st.header("Fundamental Analysis")
+    
+    # Check if we have data for the correct ticker
+    if 'stock_data' in st.session_state and st.session_state.stock_data:
+        if st.session_state.stock_data.ticker != ticker:
+            st.info(f"Current analysis is for {st.session_state.stock_data.ticker}, not {ticker}. Please fetch data for {ticker}.")
+            return
     
     if 'additional_data' not in st.session_state or st.session_state.additional_data is None:
         st.info(f"Please fetch data for {ticker} to view fundamental analysis.")

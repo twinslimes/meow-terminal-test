@@ -410,15 +410,32 @@ class BacktestEngine:
         
         return metrics
 
+def clear_backtest_state():
+    """Clear backtesting state when ticker changes."""
+    if 'backtest_engine' in st.session_state:
+        del st.session_state.backtest_engine
+    if 'backtest_results' in st.session_state:
+        del st.session_state.backtest_results
+    if 'backtest_ticker' in st.session_state:
+        del st.session_state.backtest_ticker
+
 def display_backtesting_section(ticker):
     """Display backtesting section in the app."""
     st.header("Model Backtesting")
+    
+    # Check if ticker has changed and clear results if needed
+    if 'backtest_ticker' in st.session_state and st.session_state.backtest_ticker != ticker:
+        st.info(f"Ticker changed from {st.session_state.backtest_ticker} to {ticker}. Backtesting results have been cleared.")
+        clear_backtest_state()
     
     # Initialize session state
     if 'backtest_engine' not in st.session_state:
         st.session_state.backtest_engine = None
     if 'backtest_results' not in st.session_state:
         st.session_state.backtest_results = None
+    
+    # Store current ticker in session state
+    st.session_state.backtest_ticker = ticker
     
     # Sidebar for backtest settings
     with st.sidebar:
@@ -482,6 +499,12 @@ def display_backtesting_section(ticker):
         
         # Button to run backtest
         if st.button("Run Backtest", use_container_width=True):
+            # Clear previous results when running new backtest
+            if 'backtest_engine' in st.session_state:
+                del st.session_state.backtest_engine
+            if 'backtest_results' in st.session_state:
+                del st.session_state.backtest_results
+                
             with st.spinner("Fetching historical data..."):
                 # Create backtest engine
                 backtest_engine = BacktestEngine(
@@ -566,12 +589,22 @@ def display_backtesting_section(ticker):
                 st.session_state.backtest_results = backtest_engine.get_summary_metrics()
                 
                 st.success("Backtest completed!")
+                # Force rerun to refresh the UI
+                st.rerun()
     
     # Main content area - display backtest results
-    display_backtest_results()
+    display_backtest_results(ticker)
 
-def display_backtest_results():
+def display_backtest_results(ticker):
     """Display the backtest results in the main content area."""
+    # Verify we're displaying results for the correct ticker
+    if 'backtest_ticker' in st.session_state and st.session_state.backtest_ticker != ticker:
+        st.warning(f"The backtest results are for {st.session_state.backtest_ticker}, not {ticker}. Please run a new backtest for {ticker}.")
+        if st.button("Clear Backtest Results"):
+            clear_backtest_state()
+            st.rerun()
+        return
+    
     if not st.session_state.backtest_engine or not st.session_state.backtest_results:
         st.info("Run a backtest to see results here.")
         st.markdown("""

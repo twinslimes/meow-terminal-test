@@ -253,6 +253,18 @@ def display_homepage():
     </div>
     """, unsafe_allow_html=True)
 
+def clear_analysis_results():
+    """Clear analysis results when stock data changes."""
+    # Clear prediction results
+    if 'ensemble' in st.session_state:
+        del st.session_state.ensemble
+    if 'ensemble_result' in st.session_state:
+        del st.session_state.ensemble_result
+    if 'target_price' in st.session_state:
+        del st.session_state.target_price
+    if 'T' in st.session_state:
+        del st.session_state.T
+
 def run_prediction_analysis(ticker, T, dt, M, target_price):
     """Run stock price prediction analysis with selected models"""
     if 'stock_data' not in st.session_state or st.session_state.stock_data is None:
@@ -260,6 +272,11 @@ def run_prediction_analysis(ticker, T, dt, M, target_price):
         return
     
     stock_data = st.session_state.stock_data
+    
+    # Verify we're working with the correct ticker
+    if stock_data.ticker != ticker:
+        st.warning(f"Stock data is for {stock_data.ticker}, not {ticker}. Please fetch data for {ticker} first.")
+        return
     
     with st.spinner("Running simulations - this may take a minute..."):
         # Create ensemble
@@ -298,16 +315,35 @@ def run_prediction_analysis(ticker, T, dt, M, target_price):
         st.session_state.ensemble = ensemble
         st.session_state.ensemble_result = ensemble_result
         st.session_state.target_price = target_price
+        st.session_state.T = T
+        # Save current ticker to track if ticker changes
+        st.session_state.analysis_ticker = ticker
     
     st.success("Analysis completed!")
     display_prediction_results()
 
 def display_prediction_results():
     """Display prediction results in main dashboard"""
+    # Check if we have analysis results
+    if 'ensemble' not in st.session_state or 'ensemble_result' not in st.session_state:
+        st.info("No analysis results available. Please run a prediction analysis.")
+        return
+        
     ensemble = st.session_state.ensemble
     ensemble_result = st.session_state.ensemble_result
     target_price = st.session_state.target_price
     T = st.session_state.get('T', 1.0)  # Get time horizon with default of 1.0
+    
+    # Verify we're displaying the correct ticker
+    current_ticker = st.session_state.get('current_ticker', '')
+    analysis_ticker = st.session_state.get('analysis_ticker', '')
+    
+    if current_ticker != analysis_ticker:
+        st.warning(f"The displayed analysis is for {analysis_ticker}, but the current selected ticker is {current_ticker}. Please run a new analysis.")
+        if st.button("Clear Analysis Results"):
+            clear_analysis_results()
+            st.rerun()
+        return
     
     st.markdown(win95_header("Probability Analysis Results"), unsafe_allow_html=True)
     
@@ -626,6 +662,11 @@ def display_basic_dashboard(ticker):
     if 'stock_data' in st.session_state and st.session_state.stock_data:
         stock_data = st.session_state.stock_data
         
+        # Verify we're displaying data for the correct ticker
+        if stock_data.ticker != ticker:
+            st.warning(f"Displaying data for {stock_data.ticker}, but the current selected ticker is {ticker}. Please fetch data for {ticker}.")
+            return
+        
         # Display current price and basic metrics
         col1, col2, col3 = st.columns(3)
         
@@ -770,10 +811,19 @@ def main():
     
     # User inputs for stock ticker
     ticker = st.sidebar.text_input("", value="AAPL", label_visibility="collapsed").upper()
+    # Store current ticker in session state for verification
+    st.session_state.current_ticker = ticker
+    
+    # Check if ticker has changed and clear analysis if needed
+    if 'last_analyzed_ticker' in st.session_state and st.session_state.last_analyzed_ticker != ticker:
+        clear_analysis_results()
     
     # Button to fetch data
     if st.sidebar.button("Fetch Stock Data", use_container_width=True):
         with st.spinner("Fetching data - Please wait..."):
+            # Clear previous analysis results when fetching new data
+            clear_analysis_results()
+            
             # Initialize stock data for models
             stock_data = StockData(ticker, alpha_vantage_key, fred_api_key)
             stock_data.fetch_data()
@@ -791,8 +841,11 @@ def main():
             st.session_state.stock_data = stock_data
             st.session_state.additional_data = additional_data
             st.session_state.technical_indicators = technical_indicators
+            st.session_state.last_analyzed_ticker = ticker
             
             st.sidebar.success(f"Data for {ticker} fetched successfully!")
+            # Force refresh to reflect new data
+            st.rerun()
     
     # Terminal breadcrumb path at top
     current_path = f"C:\\> STOCKS\\{ticker}\\{selected_section.upper().replace(' ', '_')}"
@@ -800,11 +853,13 @@ def main():
     
     # Display the appropriate content based on the selection
     if selected_section == "Stock Dashboard":
-        # Show empty dashboard or welcome message when no analysis is selected
-        # If data is loaded, we can show basic dashboard
-        if 'ensemble_result' in st.session_state:
+        # If we have analysis results for the current ticker, show them
+        if ('ensemble_result' in st.session_state and 
+            'analysis_ticker' in st.session_state and 
+            st.session_state.analysis_ticker == ticker):
             display_prediction_results()
         else:
+            # Otherwise show the basic dashboard
             display_basic_dashboard(ticker)
             
     elif selected_section == "Day Trader":
