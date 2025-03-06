@@ -1,0 +1,10 @@
+streamlit>=1.30.0
+numpy>=1.26.0
+pandas>=2.1.0
+matplotlib>=3.8.0
+scipy>=1.11.3
+yfinance>=0.2.35
+alpha_vantage>=2.3.1
+requests>=2.31.0
+plotly>=5.18.0
+arch>=5.6.0  # Optional - GARCH model support
