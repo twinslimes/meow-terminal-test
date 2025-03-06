@@ -12,13 +12,6 @@ import yfinance as yf
 # Polygon API key
 POLYGON_API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
 
-# Set page config
-st.set_page_config(
-    page_title="Meow Dashboard",
-    page_icon="😺",
-    layout="wide",
-)
-
 # Apply terminal-style CSS
 terminal_css = """
 <style>
@@ -1141,8 +1134,9 @@ def display_calendar_widget():
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-def main():
-    """Main function to run the dashboard"""
+# New function to run the dashboard within app.py (without set_page_config)
+def run_dashboard_in_app():
+    """Run the Meow Dashboard as an embedded component (no page config)"""
     # Apply terminal CSS
     st.markdown(terminal_css, unsafe_allow_html=True)
     
@@ -1273,6 +1267,18 @@ def main():
         <p>© 2025 Meow Terminal | Dashboard Module</p>
     </div>
     """, unsafe_allow_html=True)
+
+def main():
+    """Main function to run the dashboard standalone"""
+    # Set page config - only when run directly
+    st.set_page_config(
+        page_title="Meow Dashboard",
+        page_icon="😺",
+        layout="wide",
+    )
+    
+    # Call the shared dashboard function
+    run_dashboard_in_app()
 
 # This is the entry point of the script
 if __name__ == "__main__":
