@@ -4,6 +4,9 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import warnings
+import requests
+import re
+from datetime import datetime, timedelta
 
 # Import local modules
 from data_utils import get_api_keys, fetch_additional_stock_data, calculate_technical_indicators
@@ -19,6 +22,9 @@ from models import (
     RegimeSwitchingModel, QuasiMonteCarloModel, VarianceGammaModel, 
     NeuralSDEModel, StockModelEnsemble, HAS_ARCH
 )
+
+# Polygon API key
+POLYGON_API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
 
 # Suppress warnings in the UI
 warnings.filterwarnings("ignore")
@@ -224,6 +230,50 @@ terminal_css = """
     .stCheckbox label p {
         color: #e6f3ff !important; /* Muted white-blue for checkboxes */
     }
+
+    /* News item styling */
+    .news-item {
+        background-color: #2f2f2f;
+        border: 1px solid #e6f3ff;
+        padding: 10px;
+        margin-bottom: 10px;
+        font-family: 'VT323', monospace;
+    }
+    
+    .news-ticker {
+        font-weight: bold;
+        color: #e6f3ff;
+        font-size: 16px;
+    }
+    
+    .news-headline {
+        font-size: 18px;
+        margin: 5px 0;
+        color: #ffffff;
+        text-decoration: none;
+    }
+    
+    .news-headline:hover {
+        text-decoration: underline;
+        cursor: pointer;
+    }
+    
+    .news-outcome {
+        font-weight: bold;
+        font-size: 16px;
+    }
+    
+    .news-positive {
+        color: #4CAF50;
+    }
+    
+    .news-negative {
+        color: #F44336;
+    }
+    
+    .news-neutral {
+        color: #FFC107;
+    }
 </style>
 """
 
@@ -321,6 +371,115 @@ def run_prediction_analysis(ticker, T, dt, M, target_price):
     
     st.success("Analysis completed!")
     display_prediction_results()
+
+def predict_news_outcome(title):
+    """Simple sentiment analysis to predict outcome based on headline"""
+    positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
+                     'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
+    negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
+                     'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
+    
+    title_lower = title.lower()
+    
+    positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
+    negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
+    
+    if positive_count > negative_count:
+        return "📈 Positive", "news-positive"
+    elif negative_count > positive_count:
+        return "📉 Negative", "news-negative"
+    else:
+        return "⟷ Neutral", "news-neutral"
+
+def display_news_dashboard_section(ticker):
+    """Display the news dashboard section"""
+    st.markdown(win95_header(f"Market News Dashboard for {ticker}"), unsafe_allow_html=True)
+    
+    # Info text
+    st.markdown("<p>View the latest market news and sentiment analysis related to your selected stock.</p>", unsafe_allow_html=True)
+    
+    # Controls row
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        # Filter options
+        news_filter = st.selectbox(
+            "Filter by:",
+            ["All News", "Positive Only", "Negative Only", "Neutral Only"]
+        )
+    
+    with col2:
+        # Refresh button
+        if st.button("🔄 Refresh News", use_container_width=True):
+            st.experimental_rerun()
+    
+    # Get yesterday's date
+    yesterday = datetime.now() - timedelta(days=1)
+    date_from = yesterday.strftime("%Y-%m-%d")
+    
+    # Fetch news from Polygon API
+    with st.spinner("Fetching latest market news..."):
+        try:
+            # If a specific ticker is selected, use it to filter news
+            if ticker and ticker != "":
+                url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&order=desc&limit=10&sort=published_utc&apiKey={POLYGON_API_KEY}"
+            else:
+                url = f"https://api.polygon.io/v2/reference/news?limit=10&order=desc&sort=published_utc&apiKey={POLYGON_API_KEY}"
+            
+            response = requests.get(url)
+            data = response.json()
+            
+            if response.status_code == 200 and 'results' in data:
+                news_items = data['results']
+                
+                if not news_items:
+                    st.info("No news articles found for the selected ticker.")
+                else:
+                    # Process and display each news item
+                    for news in news_items:
+                        # Get sentiment prediction
+                        outcome_text, outcome_class = predict_news_outcome(news.get('title', ''))
+                        
+                        # Filter based on user selection
+                        if (news_filter == "Positive Only" and outcome_class != "news-positive") or \
+                           (news_filter == "Negative Only" and outcome_class != "news-negative") or \
+                           (news_filter == "Neutral Only" and outcome_class != "news-neutral"):
+                            continue
+                        
+                        # Get tickers for this news item
+                        tickers = news.get('tickers', [])
+                        ticker_str = ", ".join(tickers) if tickers else "N/A"
+                        
+                        # Format date
+                        published_date = datetime.fromisoformat(news.get('published_utc', '').replace('Z', '+00:00'))
+                        formatted_date = published_date.strftime("%Y-%m-%d %H:%M UTC")
+                        
+                        # Display news item in Windows 95 style box
+                        st.markdown(f"""
+                        <div class="news-item">
+                            <div class="news-ticker">Tickers: {ticker_str}</div>
+                            <a href="{news.get('article_url', '#')}" target="_blank" class="news-headline">{news.get('title', 'No headline available')}</a>
+                            <div>Published: {formatted_date}</div>
+                            <div class="news-outcome {outcome_class}">{outcome_text}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else:
+                st.error(f"Error fetching news: {data.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+    
+    # Additional info at the bottom
+    with st.expander("About News Sentiment Analysis"):
+        st.markdown("""
+        The news sentiment analysis uses a simple keyword-based approach to predict market impact:
+        
+        - **Positive**: Headlines containing terms like "rise," "gain," "beat," "bullish," etc.
+        - **Negative**: Headlines containing terms like "fall," "drop," "miss," "bearish," etc.
+        - **Neutral**: Headlines without clear positive or negative sentiment indicators
+        
+        This is a simplified analysis and should not be used as the sole basis for investment decisions.
+        """)
 
 def display_prediction_results():
     """Display prediction results in main dashboard"""
@@ -792,10 +951,10 @@ def main():
     # Sidebar for navigation
     st.sidebar.markdown("<h1 style='color: #e6f3ff;'>Navigation</h1>", unsafe_allow_html=True)
     
-    # All navigation options in a single dropdown
+    # All navigation options in a single dropdown - Added News Dashboard to the list
     selected_section = st.sidebar.selectbox(
         "Go to",
-        ["Stock Dashboard", "Day Trader", "Backtesting", "Stock Analysis", "Technical Indicators", "Fundamental Analysis"]
+        ["Stock Dashboard", "News Dashboard", "Day Trader", "Backtesting", "Stock Analysis", "Technical Indicators", "Fundamental Analysis"]
     )
     
     # Return to homepage button
@@ -861,6 +1020,10 @@ def main():
         else:
             # Otherwise show the basic dashboard
             display_basic_dashboard(ticker)
+    
+    # New section for News Dashboard
+    elif selected_section == "News Dashboard":
+        display_news_dashboard_section(ticker)
             
     elif selected_section == "Day Trader":
         display_day_trader_section(ticker)
