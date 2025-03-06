@@ -9,9 +9,8 @@ from datetime import datetime, timedelta
 import pytz
 import warnings
 import threading
-import queue
-from scipy import stats
 import requests
+from io import StringIO
 
 # Import local modules
 from data_utils import calculate_technical_indicators, generate_technical_signals
@@ -57,7 +56,7 @@ def init_session_state():
     if 'refresh_interval' not in st.session_state:
         st.session_state.refresh_interval = 60  # seconds
     if 'selected_timeframe' not in st.session_state:
-        st.session_state.selected_timeframe = '1m'  # Default timeframe
+        st.session_state.selected_timeframe = '5m'  # Default to 5m instead of 1m for better data availability
     if 'day_trader_ticker' not in st.session_state:
         st.session_state.day_trader_ticker = None
     if 'refresh_thread' not in st.session_state:
@@ -72,6 +71,10 @@ def init_session_state():
     if 'custom_horizon' not in st.session_state:
         # Default prediction horizon based on timeframe - will be adjusted automatically
         st.session_state.custom_horizon = 15
+    if 'fetch_retries' not in st.session_state:
+        st.session_state.fetch_retries = 0
+    if 'fetch_errors' not in st.session_state:
+        st.session_state.fetch_errors = []
 
 def get_risk_free_rate():
     """Fetch current risk-free rate from FRED API."""
@@ -124,8 +127,8 @@ def get_default_prediction_horizon(timeframe):
     
     return timeframe_horizons.get(timeframe, 15)  # Default to 15 steps if timeframe not recognized
 
-def fetch_live_data(ticker, timeframe='1m', custom_days=None):
-    """Fetch live intraday data for the selected ticker."""
+def fetch_live_data(ticker, timeframe='5m', custom_days=None):
+    """Fetch live intraday data for the selected ticker with improved error handling."""
     try:
         with st.spinner(f"Fetching live data for {ticker}..."):
             # Map user-friendly timeframe names to yfinance intervals
@@ -138,7 +141,7 @@ def fetch_live_data(ticker, timeframe='1m', custom_days=None):
                 '1h': '1h'
             }
             
-            interval = timeframe_map.get(timeframe, '1m')
+            interval = timeframe_map.get(timeframe, '5m')
             
             # Determine appropriate data range based on timeframe
             if custom_days is not None:
@@ -152,58 +155,118 @@ def fetch_live_data(ticker, timeframe='1m', custom_days=None):
             # Use yfinance to get intraday data
             stock = yf.Ticker(ticker)
             
-            # For very small timeframes like 30s, we need to use the 'period' parameter
-            if timeframe == '30s':
-                intraday_data = stock.history(period=f"{min(days, 7)}d", interval=interval)
-            else:
-                intraday_data = stock.history(period=f"{days}d", interval=interval)
+            # First, verify the ticker exists by trying to get basic info
+            info = stock.info
+            if not info or 'symbol' not in info:
+                st.error(f"Could not find ticker: {ticker}. Please verify the symbol.")
+                return None
             
-            if len(intraday_data) > 0:
-                # If market is closed, we might get data from the last trading day
-                # Convert index to US Eastern time for market hours
+            # For very small timeframes like 30s, we need to use shorter periods
+            period = min(days, 7) if timeframe in ['30s', '1m'] else days
+            
+            # Try to get the historical data
+            try:
+                intraday_data = stock.history(period=f"{period}d", interval=interval)
+            except Exception as e:
+                st.session_state.fetch_errors.append(f"Error fetching {interval} data: {str(e)}")
+                # If 30s fails, try 1m
+                if interval == '30s':
+                    st.warning("30-second data not available. Falling back to 1-minute data.")
+                    interval = '1m'
+                    timeframe = '1m'
+                    st.session_state.selected_timeframe = '1m'
+                    intraday_data = stock.history(period=f"{period}d", interval=interval)
+                # If 1m fails, try 5m
+                elif interval == '1m':
+                    st.warning("1-minute data not available. Falling back to 5-minute data.")
+                    interval = '5m'
+                    timeframe = '5m'
+                    st.session_state.selected_timeframe = '5m'
+                    intraday_data = stock.history(period=f"{period}d", interval=interval)
+                else:
+                    # Otherwise re-raise the error
+                    raise
+            
+            # Check if we got any data
+            if intraday_data.empty:
+                st.error(f"No data available for {ticker} with {interval} interval. The market may be closed or the data not yet available.")
+                # Increment retry counter
+                st.session_state.fetch_retries += 1
+                if st.session_state.fetch_retries >= 3:
+                    st.error("Multiple fetching attempts failed. Consider using a different timeframe or ticker.")
+                    st.session_state.fetch_retries = 0
+                return None
+            
+            # Reset retry counter on success
+            st.session_state.fetch_retries = 0
+            
+            # If we have fewer than 10 data points, warn the user
+            if len(intraday_data) < 10:
+                st.warning(f"Limited data available ({len(intraday_data)} points). Some indicators may not be calculated correctly.")
+            
+            # Convert index to US Eastern time for market hours
+            if intraday_data.index.tzinfo is not None:
                 eastern = pytz.timezone('US/Eastern')
                 intraday_data.index = intraday_data.index.tz_convert(eastern)
-                
-                # Also fetch daily data for model calibration
+            
+            # Also fetch daily data for model calibration (at least 60 days for stability)
+            try:
                 daily_data = stock.history(period="3mo")
-                
-                # Store both in session state for model calibration
-                st.session_state.intraday_data = intraday_data
-                st.session_state.daily_data = daily_data
-                
-                # Get current market price
+            except Exception as e:
+                st.warning(f"Could not fetch full daily data: {e}. Using shorter period.")
+                daily_data = stock.history(period="1mo")
+            
+            # Store both in session state for model calibration
+            st.session_state.intraday_data = intraday_data
+            st.session_state.daily_data = daily_data
+            
+            # Get current market price
+            if not intraday_data.empty:
                 current_price = intraday_data['Close'].iloc[-1]
                 st.session_state.current_price = current_price
-                
-                # Store last update time
-                st.session_state.last_update_time = datetime.now()
-                
-                # Store data for live chart
-                st.session_state.live_chart_data = intraday_data
-                
-                # Update ticker in session state
-                st.session_state.day_trader_ticker = ticker
-                
-                # Update default prediction horizon based on new timeframe
-                if st.session_state.custom_horizon == get_default_prediction_horizon(st.session_state.selected_timeframe):
-                    # Only update if user hasn't manually changed it
-                    st.session_state.custom_horizon = get_default_prediction_horizon(timeframe)
-                
-                # Fetch current risk-free rate
-                current_rate = get_risk_free_rate()
-                if current_rate != st.session_state.risk_free_rate:
-                    st.session_state.risk_free_rate = current_rate
-                
-                return intraday_data
             else:
-                st.error("No intraday data available. Market may be closed.")
-                return None
+                # Fallback to last daily price if no intraday data
+                current_price = daily_data['Close'].iloc[-1] if not daily_data.empty else None
+                if current_price:
+                    st.session_state.current_price = current_price
+                else:
+                    st.error("Could not determine current price.")
+                    return None
+            
+            # Store last update time
+            st.session_state.last_update_time = datetime.now()
+            
+            # Store data for live chart
+            st.session_state.live_chart_data = intraday_data
+            
+            # Update ticker in session state
+            st.session_state.day_trader_ticker = ticker
+            
+            # Update default prediction horizon based on new timeframe
+            if st.session_state.custom_horizon == get_default_prediction_horizon(st.session_state.selected_timeframe):
+                # Only update if user hasn't manually changed it
+                st.session_state.custom_horizon = get_default_prediction_horizon(timeframe)
+            
+            # Fetch current risk-free rate
+            current_rate = get_risk_free_rate()
+            if current_rate != st.session_state.risk_free_rate:
+                st.session_state.risk_free_rate = current_rate
+            
+            st.success(f"Successfully fetched {len(intraday_data)} data points for {ticker}")
+            return intraday_data
     except Exception as e:
-        st.error(f"Error fetching live data: {e}")
+        st.error(f"Error fetching data for {ticker}: {e}")
+        import traceback
+        st.session_state.fetch_errors.append(traceback.format_exc())
         return None
 
 def create_live_chart(data, ticker, predictions=None):
     """Create an interactive live chart with candlesticks and indicators."""
+    # Handle empty data
+    if data is None or data.empty:
+        st.error("No data available to create chart.")
+        return None
+    
     # Create subplots with price, volume, and indicators
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                       vertical_spacing=0.05, row_heights=[0.5, 0.2, 0.3],
@@ -234,11 +297,58 @@ def create_live_chart(data, ticker, predictions=None):
         row=2, col=1
     )
     
-    # Calculate and add moving averages
-    data['EMA_9'] = data['Close'].ewm(span=9, adjust=False).mean()
-    data['SMA_20'] = data['Close'].rolling(window=20).mean()
-    data['SMA_50'] = data['Close'].rolling(window=50).mean()
-    data['VWAP'] = (data['Close'] * data['Volume']).cumsum() / data['Volume'].cumsum()
+    # Calculate and add moving averages (with safeguards for short data)
+    data['EMA_9'] = data['Close'].ewm(span=min(9, len(data) - 1), adjust=False).mean()
+    
+    # Only calculate longer MAs if we have enough data
+    if len(data) >= 20:
+        data['SMA_20'] = data['Close'].rolling(window=20).mean()
+    else:
+        data['SMA_20'] = data['Close']  # Fallback for insufficient data
+        
+    if len(data) >= 50:
+        data['SMA_50'] = data['Close'].rolling(window=50).mean()
+    else:
+        data['SMA_50'] = data['Close']  # Fallback for insufficient data
+    
+    # Calculate VWAP - reset cumulative sums if new trading day
+    if len(data) > 0:
+        # Get trading day for each data point
+        trading_days = data.index.date
+        day_groups = []
+        current_day = None
+        
+        # Group by trading day
+        for i, day in enumerate(trading_days):
+            if day != current_day:
+                current_day = day
+                day_groups.append([i])
+            else:
+                day_groups[-1].append(i)
+        
+        # Calculate VWAP for each day
+        vwap = np.zeros(len(data))
+        
+        for group in day_groups:
+            cumulative_pv = 0
+            cumulative_volume = 0
+            for i in group:
+                # Skip rows with zero volume
+                if data['Volume'].iloc[i] > 0:
+                    price = data['Close'].iloc[i]
+                    volume = data['Volume'].iloc[i]
+                    cumulative_pv += price * volume
+                    cumulative_volume += volume
+                    
+                    # Avoid division by zero
+                    if cumulative_volume > 0:
+                        vwap[i] = cumulative_pv / cumulative_volume
+                    else:
+                        vwap[i] = price  # Fallback to price if no volume
+        
+        data['VWAP'] = vwap
+    else:
+        data['VWAP'] = data['Close']  # Fallback for empty data
     
     # Add MAs to chart
     fig.add_trace(
@@ -277,9 +387,17 @@ def create_live_chart(data, ticker, predictions=None):
         delta = data['Close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
-        avg_gain = gain.rolling(window=14).mean()
-        avg_loss = loss.rolling(window=14).mean()
-        rs = avg_gain / avg_loss
+        avg_gain = gain.rolling(window=min(14, len(data) - 1)).mean()
+        avg_loss = loss.rolling(window=min(14, len(data) - 1)).mean()
+        
+        # Handle division by zero
+        rs = np.zeros(len(avg_gain))
+        for i in range(len(avg_gain)):
+            if avg_loss.iloc[i] > 0:
+                rs[i] = avg_gain.iloc[i] / avg_loss.iloc[i]
+            else:
+                rs[i] = 100  # If no losses, RSI approaches 100
+                
         data['RSI'] = 100 - (100 / (1 + rs))
         
         # Add RSI chart
@@ -348,60 +466,62 @@ def create_live_chart(data, ticker, predictions=None):
     
     # Add predictions if available
     if predictions is not None and len(predictions) > 0:
-        # Extract the last actual timestamp
-        last_time = data.index[-1]
-        
-        # Calculate interval in minutes based on timeframe
-        timeframe_minutes = {
-            '30s': 0.5,  # 0.5 minutes (30 seconds)
-            '1m': 1,
-            '5m': 5,
-            '15m': 15,
-            '30m': 30,
-            '1h': 60
-        }.get(st.session_state.selected_timeframe, 1)
-        
-        # Generate future timestamps for predictions
-        future_times = [last_time + timedelta(minutes=timeframe_minutes * (i+1)) for i in range(len(predictions))]
-        
-        # Add prediction line
-        fig.add_trace(
-            go.Scatter(
-                x=[last_time] + future_times,
-                y=[data['Close'].iloc[-1]] + predictions,
-                line=dict(color='#4a90e2', width=2, dash='dot'),
-                name="Prediction"
-            ),
-            row=1, col=1
-        )
-        
-        # Add prediction confidence interval if available
-        if 'prediction_upper' in st.session_state and 'prediction_lower' in st.session_state:
+        # Make sure we have data to use
+        if len(data) > 0:
+            # Extract the last actual timestamp
+            last_time = data.index[-1]
+            
+            # Calculate interval in minutes based on timeframe
+            timeframe_minutes = {
+                '30s': 0.5,  # 0.5 minutes (30 seconds)
+                '1m': 1,
+                '5m': 5,
+                '15m': 15,
+                '30m': 30,
+                '1h': 60
+            }.get(st.session_state.selected_timeframe, 1)
+            
+            # Generate future timestamps for predictions
+            future_times = [last_time + timedelta(minutes=timeframe_minutes * (i+1)) for i in range(len(predictions))]
+            
+            # Add prediction line
             fig.add_trace(
                 go.Scatter(
-                    x=future_times,
-                    y=st.session_state.prediction_upper,
-                    line=dict(width=0),
-                    marker=dict(color="#444"),
-                    showlegend=False,
-                    name="Upper Bound"
+                    x=[last_time] + future_times,
+                    y=[data['Close'].iloc[-1]] + predictions,
+                    line=dict(color='#4a90e2', width=2, dash='dot'),
+                    name="Prediction"
                 ),
                 row=1, col=1
             )
             
-            fig.add_trace(
-                go.Scatter(
-                    x=future_times,
-                    y=st.session_state.prediction_lower,
-                    line=dict(width=0),
-                    marker=dict(color="#444"),
-                    fillcolor='rgba(74, 144, 226, 0.3)',
-                    fill='tonexty',
-                    showlegend=False,
-                    name="Lower Bound"
-                ),
-                row=1, col=1
-            )
+            # Add prediction confidence interval if available
+            if 'prediction_upper' in st.session_state and 'prediction_lower' in st.session_state and len(st.session_state.prediction_upper) == len(predictions):
+                fig.add_trace(
+                    go.Scatter(
+                        x=future_times,
+                        y=st.session_state.prediction_upper,
+                        line=dict(width=0),
+                        marker=dict(color="#444"),
+                        showlegend=False,
+                        name="Upper Bound"
+                    ),
+                    row=1, col=1
+                )
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=future_times,
+                        y=st.session_state.prediction_lower,
+                        line=dict(width=0),
+                        marker=dict(color="#444"),
+                        fillcolor='rgba(74, 144, 226, 0.3)',
+                        fill='tonexty',
+                        showlegend=False,
+                        name="Lower Bound"
+                    ),
+                    row=1, col=1
+                )
     
     # Update layout for terminal theme
     fig.update_layout(
@@ -517,16 +637,30 @@ def generate_ensemble_prediction(ticker, horizon=None, num_sims=1000):
         stock_data.price = current_price
         
         # Calculate volatility from intraday data
-        intraday_returns = st.session_state.intraday_data['Close'].pct_change().dropna()
-        intraday_volatility = intraday_returns.std() * np.sqrt(252 * 6.5 * 60)  # Annualized from minute data
-        stock_data.volatility = intraday_volatility
+        intraday_data = st.session_state.intraday_data
+        if len(intraday_data) > 1:  # Need at least 2 points for returns
+            intraday_returns = intraday_data['Close'].pct_change().dropna()
+            if len(intraday_returns) > 0:
+                intraday_volatility = intraday_returns.std() * np.sqrt(252 * 6.5 * 60)  # Annualized from minute data
+                stock_data.volatility = intraday_volatility
+            else:
+                # Fallback if no valid returns
+                stock_data.volatility = 0.3  # Default moderate volatility
+        else:
+            # Fallback if insufficient data
+            stock_data.volatility = 0.3
         
         # Use current risk-free rate from session state
         stock_data.risk_free_rate = st.session_state.risk_free_rate
         
         # Set historical data for calibration
-        stock_data.historical_data = st.session_state.daily_data
-        stock_data.returns = stock_data.historical_data['Close'].pct_change().dropna()
+        if 'daily_data' in st.session_state and not st.session_state.daily_data.empty:
+            stock_data.historical_data = st.session_state.daily_data
+            stock_data.returns = stock_data.historical_data['Close'].pct_change().dropna()
+        else:
+            # Use intraday data if daily data not available
+            stock_data.historical_data = intraday_data
+            stock_data.returns = intraday_returns if 'intraday_returns' in locals() else pd.Series()
         
         # Convert timeframe to minutes for T calculation
         interval_minutes = {
@@ -536,7 +670,7 @@ def generate_ensemble_prediction(ticker, horizon=None, num_sims=1000):
             '15m': 15,
             '30m': 30,
             '1h': 60
-        }.get(st.session_state.selected_timeframe, 1)
+        }.get(st.session_state.selected_timeframe, 5)  # Default to 5m if not found
         
         # Initialize models
         models = {
@@ -561,35 +695,46 @@ def generate_ensemble_prediction(ticker, horizon=None, num_sims=1000):
         dt = T / horizon
         
         for model_name, model in models.items():
-            # Run simulation
-            result = model.simulate(T, dt, num_sims, current_price * 1.01)  # Target price doesn't matter here
-            
-            # Extract prices from the simulation
-            if 'paths' in result:
-                # Use full paths if available
-                paths = result['paths']
-                predictions = []
-                uppers = []
-                lowers = []
+            try:
+                # Run simulation
+                result = model.simulate(T, dt, num_sims, current_price * 1.01)  # Target price doesn't matter here
                 
-                for i in range(1, horizon + 1):
-                    if i < paths.shape[1]:
-                        step_prices = paths[:, i]
-                        predictions.append(np.mean(step_prices))
-                        uppers.append(np.percentile(step_prices, 95))
-                        lowers.append(np.percentile(step_prices, 5))
-            else:
-                # Fall back to simplified prediction
-                final_prices = result['final_prices']
-                # Linearly interpolate to create path
-                predictions = [current_price + (result['mean_price'] - current_price) * (i/horizon) for i in range(1, horizon + 1)]
-                # Create confidence intervals
-                uppers = [predictions[i-1] + result['std_price'] * np.sqrt(i/horizon) for i in range(1, horizon + 1)]
-                lowers = [predictions[i-1] - result['std_price'] * np.sqrt(i/horizon) for i in range(1, horizon + 1)]
-            
-            model_predictions[model_name] = predictions
-            model_upper_bounds[model_name] = uppers
-            model_lower_bounds[model_name] = lowers
+                # Extract prices from the simulation
+                if 'paths' in result:
+                    # Use full paths if available
+                    paths = result['paths']
+                    predictions = []
+                    uppers = []
+                    lowers = []
+                    
+                    for i in range(1, horizon + 1):
+                        if i < paths.shape[1]:
+                            step_prices = paths[:, i]
+                            predictions.append(np.mean(step_prices))
+                            uppers.append(np.percentile(step_prices, 95))
+                            lowers.append(np.percentile(step_prices, 5))
+                else:
+                    # Fall back to simplified prediction
+                    final_prices = result['final_prices']
+                    # Linearly interpolate to create path
+                    predictions = [current_price + (result['mean_price'] - current_price) * (i/horizon) for i in range(1, horizon + 1)]
+                    # Create confidence intervals
+                    uppers = [predictions[i-1] + result['std_price'] * np.sqrt(i/horizon) for i in range(1, horizon + 1)]
+                    lowers = [predictions[i-1] - result['std_price'] * np.sqrt(i/horizon) for i in range(1, horizon + 1)]
+                
+                model_predictions[model_name] = predictions
+                model_upper_bounds[model_name] = uppers
+                model_lower_bounds[model_name] = lowers
+            except Exception as e:
+                st.warning(f"Error with {model_name} model: {e}")
+                # Create a simple fallback prediction
+                predictions = [current_price * (1 + 0.0001 * i) for i in range(1, horizon + 1)]  # Slight upward bias
+                uppers = [p * 1.01 for p in predictions]  # 1% above
+                lowers = [p * 0.99 for p in predictions]  # 1% below
+                
+                model_predictions[model_name] = predictions
+                model_upper_bounds[model_name] = uppers
+                model_lower_bounds[model_name] = lowers
         
         # Get current model weights
         weights = st.session_state.model_weights
@@ -688,7 +833,7 @@ def update_prediction_accuracy():
         # Find index positions after prediction time
         after_indices = price_data.index[price_data.index > pred_time]
         
-        if len(after_indices) < pred_record['horizon']:
+        if len(after_indices) < 1:
             continue  # Not enough data yet
         
         # Get actual prices at the prediction horizons
@@ -710,37 +855,41 @@ def update_prediction_accuracy():
             
             avg_error = sum(errors) / len(errors) if errors else 0
             
-            # Direction accuracy (final point)
+            # Direction accuracy (final or last available point)
             if len(actual_prices) > 0 and len(pred_record['predictions']) > 0:
-                predicted_direction = 1 if pred_record['predictions'][-1] > pred_record['price'] else -1
-                actual_direction = 1 if actual_prices[-1] > pred_record['price'] else -1
-                direction_correct = predicted_direction == actual_direction
+                # Use the last actual price we have
+                last_actual_idx = min(len(actual_prices), len(pred_record['predictions'])) - 1
                 
-                # Store accuracy metrics
-                pred_record['avg_error'] = avg_error
-                pred_record['direction_correct'] = direction_correct
-                pred_record['evaluated'] = True
-                
-                # Update overall accuracy tracking
-                st.session_state.prediction_accuracy.append(direction_correct)
-                
-                # Keep only recent accuracy records
-                if len(st.session_state.prediction_accuracy) > 50:
-                    st.session_state.prediction_accuracy = st.session_state.prediction_accuracy[-50:]
-    
-                # Now evaluate each model's predictions if available
-                if 'model_predictions' in pred_record:
-                    for model_name, model_preds in pred_record['model_predictions'].items():
-                        if len(model_preds) > 0:
-                            # Direction accuracy for this model
-                            model_direction = 1 if model_preds[-1] > pred_record['price'] else -1
-                            model_correct = model_direction == actual_direction
-                            
-                            # Update model performance counter
-                            if model_name in st.session_state.model_performance:
-                                st.session_state.model_performance[model_name]['total'] += 1
-                                if model_correct:
-                                    st.session_state.model_performance[model_name]['correct'] += 1
+                if last_actual_idx >= 0:
+                    predicted_direction = 1 if pred_record['predictions'][last_actual_idx] > pred_record['price'] else -1
+                    actual_direction = 1 if actual_prices[last_actual_idx] > pred_record['price'] else -1
+                    direction_correct = predicted_direction == actual_direction
+                    
+                    # Store accuracy metrics
+                    pred_record['avg_error'] = avg_error
+                    pred_record['direction_correct'] = direction_correct
+                    pred_record['evaluated'] = True
+                    
+                    # Update overall accuracy tracking
+                    st.session_state.prediction_accuracy.append(direction_correct)
+                    
+                    # Keep only recent accuracy records
+                    if len(st.session_state.prediction_accuracy) > 50:
+                        st.session_state.prediction_accuracy = st.session_state.prediction_accuracy[-50:]
+            
+                    # Now evaluate each model's predictions if available
+                    if 'model_predictions' in pred_record:
+                        for model_name, model_preds in pred_record['model_predictions'].items():
+                            if len(model_preds) > last_actual_idx:
+                                # Direction accuracy for this model
+                                model_direction = 1 if model_preds[last_actual_idx] > pred_record['price'] else -1
+                                model_correct = model_direction == actual_direction
+                                
+                                # Update model performance counter
+                                if model_name in st.session_state.model_performance:
+                                    st.session_state.model_performance[model_name]['total'] += 1
+                                    if model_correct:
+                                        st.session_state.model_performance[model_name]['correct'] += 1
     
     # Update model weights based on accuracy
     update_model_weights()
@@ -758,7 +907,7 @@ def auto_refresh_data(ticker, interval_seconds=60):
             new_data = fetch_live_data(ticker, st.session_state.selected_timeframe)
             
             # Generate new predictions
-            if new_data is not None:
+            if new_data is not None and not new_data.empty:
                 generate_ensemble_prediction(ticker)
                 
                 # Update accuracy of past predictions
@@ -805,8 +954,8 @@ def display_day_trader_section(ticker):
         # Timeframe selection
         timeframe = st.selectbox(
             "Chart Timeframe",
-            options=['30s', '1m', '5m', '15m', '30m', '1h'],
-            index=['30s', '1m', '5m', '15m', '30m', '1h'].index(st.session_state.selected_timeframe)
+            options=['1m', '5m', '15m', '30m', '1h', '30s'],  # Put 30s last as it's least reliable
+            index=['1m', '5m', '15m', '30m', '1h', '30s'].index(st.session_state.selected_timeframe)
         )
         
         if timeframe != st.session_state.selected_timeframe:
@@ -827,9 +976,10 @@ def display_day_trader_section(ticker):
         
         # Fetch data button
         if st.button("Fetch Live Data", key="fetch_data", use_container_width=True):
-            fetch_live_data(ticker, timeframe, custom_days=data_range)
-            # Generate initial predictions
-            generate_ensemble_prediction(ticker)
+            data = fetch_live_data(ticker, timeframe, custom_days=data_range)
+            if data is not None and not data.empty:
+                # Generate initial predictions
+                generate_ensemble_prediction(ticker)
         
         # Auto-refresh toggle
         auto_refresh = st.toggle("Auto-Refresh Data", value=st.session_state.auto_refresh)
@@ -952,8 +1102,11 @@ def display_day_trader_section(ticker):
         
         # Button to generate prediction
         if st.button("Generate Prediction", key="generate_prediction", use_container_width=True):
-            with st.spinner("Generating price predictions..."):
-                generate_ensemble_prediction(ticker, horizon)
+            if 'intraday_data' in st.session_state and not st.session_state.intraday_data.empty:
+                with st.spinner("Generating price predictions..."):
+                    generate_ensemble_prediction(ticker, horizon)
+            else:
+                st.error("Please fetch data first before generating predictions.")
         
         # Show prediction accuracy if available
         if st.session_state.prediction_accuracy and len(st.session_state.prediction_accuracy) > 0:
@@ -976,7 +1129,7 @@ def display_day_trader_section(ticker):
             """, unsafe_allow_html=True)
         
         # Technical signals if data available
-        if 'live_chart_data' in st.session_state and st.session_state.live_chart_data is not None:
+        if 'live_chart_data' in st.session_state and st.session_state.live_chart_data is not None and not st.session_state.live_chart_data.empty:
             st.markdown("<h3 style='color: #e6f3ff;'>Trading Signals</h3>", unsafe_allow_html=True)
             
             # Calculate technical indicators
@@ -1003,12 +1156,14 @@ def display_day_trader_section(ticker):
                             for signal in signals[category]:
                                 signal_color = "green" if signal['direction'] == "bullish" else "red" if signal['direction'] == "bearish" else "gray"
                                 st.markdown(f"<span style='color:{signal_color};'>• {signal['description']}</span>", unsafe_allow_html=True)
+            else:
+                st.warning(f"Not enough data points ({len(data)}) to calculate technical indicators. Need at least 14.")
     
     # Main chart area
     with col1:
         chart_container = st.container()
         with chart_container:
-            if 'live_chart_data' in st.session_state and st.session_state.live_chart_data is not None:
+            if 'live_chart_data' in st.session_state and st.session_state.live_chart_data is not None and not st.session_state.live_chart_data.empty:
                 # Create and display live chart
                 fig = create_live_chart(
                     st.session_state.live_chart_data, 
@@ -1020,6 +1175,12 @@ def display_day_trader_section(ticker):
                 # Prompt to fetch data
                 st.info(f"Click 'Fetch Live Data' to load intraday chart for {ticker}")
                 
+                # If we have fetch errors, display them
+                if 'fetch_errors' in st.session_state and st.session_state.fetch_errors:
+                    with st.expander("Fetch Error Details", expanded=False):
+                        for i, error in enumerate(st.session_state.fetch_errors[-3:]):  # Show only the last 3 errors
+                            st.error(f"Error {i+1}: {error}")
+                
                 # Example chart image/placeholder
                 st.markdown(f"""
                 <div style="text-align: center; margin: 20px; padding: 40px; border: 1px dashed #e6f3ff; border-radius: 10px;">
@@ -1029,117 +1190,121 @@ def display_day_trader_section(ticker):
                         Technical indicators and predictive algorithms<br>
                         Auto-refreshing price data for real-time analysis
                     </p>
+                    <div style="color: #e6f3ff; margin-top: 15px; font-size: 14px;">
+                        <b>Tip:</b> Start with 5 minute (5m) candles for most reliable data.<br>
+                        30-second data is experimental and may not be available for all stocks.
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
         
         # Add key metrics below the chart
-        if 'live_chart_data' in st.session_state and st.session_state.live_chart_data is not None:
+        if 'live_chart_data' in st.session_state and st.session_state.live_chart_data is not None and not st.session_state.live_chart_data.empty:
             data = st.session_state.live_chart_data
             
             # Show key trading metrics
             st.markdown("<h3 style='color: #e6f3ff;'>Key Trading Metrics</h3>", unsafe_allow_html=True)
             metrics_cols = st.columns(4)
             
-            # Technical indicators for quick reference
-            if len(data) >= 14:  # Need enough data for RSI
+            # Calculate indicators
+            if len(data) >= 14:  # Need enough data for RSI and other indicators
                 indicators = calculate_technical_indicators(data)
-                latest = indicators.iloc[-1]
-                
-                with metrics_cols[0]:
-                    # RSI
-                    rsi_value = latest['RSI']
-                    rsi_status = "Overbought" if rsi_value > 70 else "Oversold" if rsi_value < 30 else "Neutral"
-                    rsi_color = "red" if rsi_value > 70 else "green" if rsi_value < 30 else "gray"
+                if not indicators.empty:
+                    latest = indicators.iloc[-1]
                     
-                    st.metric(
-                        label="RSI (14)",
-                        value=f"{rsi_value:.2f}",
-                        delta=rsi_status,
-                        delta_color="off"
-                    )
-                    st.markdown(f"<span style='color:{rsi_color};'>{rsi_status}</span>", unsafe_allow_html=True)
-                
-                with metrics_cols[1]:
-                    # MACD if available
-                    if 'MACD' in latest and 'MACD_Signal' in latest:
-                        macd_value = latest['MACD']
-                        signal_value = latest['MACD_Signal']
-                        macd_diff = macd_value - signal_value
-                        macd_status = "Bullish" if macd_diff > 0 else "Bearish"
-                        macd_color = "green" if macd_diff > 0 else "red"
-                        
-                        st.metric(
-                            label="MACD",
-                            value=f"{macd_value:.4f}",
-                            delta=f"{macd_diff:.4f}",
-                            delta_color="normal" if macd_diff > 0 else "inverse"
-                        )
-                        st.markdown(f"<span style='color:{macd_color};'>{macd_status}</span>", unsafe_allow_html=True)
-                    else:
-                        st.metric(
-                            label="MACD",
-                            value="N/A"
-                        )
-                
-                with metrics_cols[2]:
-                    # Bollinger Bands if available
-                    if all(band in latest for band in ['BB_Upper', 'BB_Lower', 'BB_Middle']):
-                        current_price = latest['Close']
-                        bb_upper = latest['BB_Upper']
-                        bb_lower = latest['BB_Lower']
-                        
-                        # %B indicator
-                        pct_b = (current_price - bb_lower) / (bb_upper - bb_lower) if (bb_upper - bb_lower) != 0 else 0.5
-                        bb_status = "Upper Band" if pct_b > 0.8 else "Lower Band" if pct_b < 0.2 else "Middle"
-                        bb_color = "red" if pct_b > 0.8 else "green" if pct_b < 0.2 else "gray"
-                        
-                        st.metric(
-                            label="Bollinger %B",
-                            value=f"{pct_b:.2f}",
-                            delta=bb_status,
-                            delta_color="off"
-                        )
-                        st.markdown(f"<span style='color:{bb_color};'>{bb_status}</span>", unsafe_allow_html=True)
-                    else:
-                        st.metric(
-                            label="Bollinger %B",
-                            value="N/A"
-                        )
-                
-                with metrics_cols[3]:
-                    # Moving Average Relationship
-                    current_price = latest['Close']
-                    sma_20 = latest.get('SMA_20', None)
-                    sma_50 = latest.get('SMA_50', None)
-                    
-                    if sma_20 is not None and sma_50 is not None:
-                        if current_price > sma_20 > sma_50:
-                            ma_status = "Strong Uptrend"
-                            ma_color = "green"
-                        elif current_price > sma_20:
-                            ma_status = "Uptrend"
-                            ma_color = "lightgreen"
-                        elif current_price < sma_20 < sma_50:
-                            ma_status = "Strong Downtrend"
-                            ma_color = "red"
-                        elif current_price < sma_20:
-                            ma_status = "Downtrend"
-                            ma_color = "pink"
+                    with metrics_cols[0]:
+                        # RSI
+                        if 'RSI' in latest:
+                            rsi_value = latest['RSI']
+                            rsi_status = "Overbought" if rsi_value > 70 else "Oversold" if rsi_value < 30 else "Neutral"
+                            rsi_color = "red" if rsi_value > 70 else "green" if rsi_value < 30 else "gray"
+                            
+                            st.metric(
+                                label="RSI (14)",
+                                value=f"{rsi_value:.2f}",
+                                delta=rsi_status,
+                                delta_color="off"
+                            )
+                            st.markdown(f"<span style='color:{rsi_color};'>{rsi_status}</span>", unsafe_allow_html=True)
                         else:
-                            ma_status = "Consolidating"
-                            ma_color = "gray"
+                            st.metric(label="RSI (14)", value="N/A")
+                    
+                    with metrics_cols[1]:
+                        # MACD if available
+                        if 'MACD' in latest and 'MACD_Signal' in latest:
+                            macd_value = latest['MACD']
+                            signal_value = latest['MACD_Signal']
+                            macd_diff = macd_value - signal_value
+                            macd_status = "Bullish" if macd_diff > 0 else "Bearish"
+                            macd_color = "green" if macd_diff > 0 else "red"
+                            
+                            st.metric(
+                                label="MACD",
+                                value=f"{macd_value:.4f}",
+                                delta=f"{macd_diff:.4f}",
+                                delta_color="normal" if macd_diff > 0 else "inverse"
+                            )
+                            st.markdown(f"<span style='color:{macd_color};'>{macd_status}</span>", unsafe_allow_html=True)
+                        else:
+                            st.metric(label="MACD", value="N/A")
+                    
+                    with metrics_cols[2]:
+                        # Bollinger Bands if available
+                        if all(band in latest for band in ['BB_Upper', 'BB_Lower', 'BB_Middle']):
+                            current_price = latest['Close']
+                            bb_upper = latest['BB_Upper']
+                            bb_lower = latest['BB_Lower']
+                            
+                            # %B indicator
+                            pct_b = (current_price - bb_lower) / (bb_upper - bb_lower) if (bb_upper - bb_lower) != 0 else 0.5
+                            bb_status = "Upper Band" if pct_b > 0.8 else "Lower Band" if pct_b < 0.2 else "Middle"
+                            bb_color = "red" if pct_b > 0.8 else "green" if pct_b < 0.2 else "gray"
+                            
+                            st.metric(
+                                label="Bollinger %B",
+                                value=f"{pct_b:.2f}",
+                                delta=bb_status,
+                                delta_color="off"
+                            )
+                            st.markdown(f"<span style='color:{bb_color};'>{bb_status}</span>", unsafe_allow_html=True)
+                        else:
+                            st.metric(label="Bollinger %B", value="N/A")
+                    
+                    with metrics_cols[3]:
+                        # Moving Average Relationship
+                        current_price = latest['Close']
+                        sma_20 = latest.get('SMA_20', None)
+                        sma_50 = latest.get('SMA_50', None)
                         
-                        # Calculate distance from price to SMA20
-                        distance = (current_price / sma_20 - 1) * 100
-                        
-                        st.metric(
-                            label="Trend Status",
-                            value=ma_status,
-                            delta=f"{distance:.2f}% from SMA20"
-                        )
-                        st.markdown(f"<span style='color:{ma_color};'>{ma_status}</span>", unsafe_allow_html=True)
-                    else:
-                        st.metric(
-                            label="Trend Status",
-                            value="N/A"
-                        )
+                        if sma_20 is not None and sma_50 is not None:
+                            if current_price > sma_20 > sma_50:
+                                ma_status = "Strong Uptrend"
+                                ma_color = "green"
+                            elif current_price > sma_20:
+                                ma_status = "Uptrend"
+                                ma_color = "lightgreen"
+                            elif current_price < sma_20 < sma_50:
+                                ma_status = "Strong Downtrend"
+                                ma_color = "red"
+                            elif current_price < sma_20:
+                                ma_status = "Downtrend"
+                                ma_color = "pink"
+                            else:
+                                ma_status = "Consolidating"
+                                ma_color = "gray"
+                            
+                            # Calculate distance from price to SMA20
+                            distance = (current_price / sma_20 - 1) * 100
+                            
+                            st.metric(
+                                label="Trend Status",
+                                value=ma_status,
+                                delta=f"{distance:.2f}% from SMA20"
+                            )
+                            st.markdown(f"<span style='color:{ma_color};'>{ma_status}</span>", unsafe_allow_html=True)
+                        else:
+                            st.metric(label="Trend Status", value="N/A")
+            else:
+                for col in metrics_cols:
+                    with col:
+                        st.metric(label="Insufficient Data", value="N/A")
+                st.warning(f"Only {len(data)} data points available. Need at least 14 for metrics.")
