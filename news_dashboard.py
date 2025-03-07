@@ -1,240 +1,261 @@
 import requests
 import re
 from datetime import datetime, timedelta
-import tkinter as tk
-from tkinter import ttk
-import webbrowser
+from flask import Flask, render_template, jsonify
+import os
 
-class NewsApp:
-    def __init__(self, root, api_key):
-        self.root = root
-        self.api_key = api_key
-        self.root.title("Stock News Dashboard")
-        self.root.geometry("800x600")
-        
-        # Configure the main window
-        self.root.configure(bg="#f0f0f0")
-        
-        # Main container frame
-        main_container = tk.Frame(root, bg="#f0f0f0")
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Title at the very top
-        title_label = tk.Label(main_container, text="Major Stock News", font=("Helvetica", 24), bg="#f0f0f0")
-        title_label.pack(pady=10)
-        
-        # =====================================================================
-        # MARKET CALENDAR SECTION - Prominently displayed at the top
-        # =====================================================================
-        calendar_frame = tk.LabelFrame(main_container, text="Market Schedule", font=("Helvetica", 14, "bold"), 
-                                     bg="#f0f0f0", padx=10, pady=10)
-        calendar_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Get the current week's Monday date
-        today = datetime.now().date()
-        monday = today - timedelta(days=today.weekday())
-        
-        # Create week label
-        week_label = tk.Label(calendar_frame, 
-                             text=f"Week of {monday.strftime('%B %d, %Y')}",
-                             font=("Helvetica", 12, "bold"),
-                             bg="#f0f0f0")
-        week_label.pack(pady=5)
-        
-        # Create weekday headers frame
-        weekday_frame = tk.Frame(calendar_frame, bg="#f0f0f0")
-        weekday_frame.pack(fill=tk.X, pady=5)
-        
-        # Create 5 columns (Monday to Friday)
-        weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        day_frames = []
-        
-        for i, day in enumerate(weekdays):
-            current_date = monday + timedelta(days=i)
-            # Frame for each day
-            day_column = tk.Frame(weekday_frame, bg="#f0f0f0", bd=1, relief=tk.GROOVE)
-            day_column.grid(row=0, column=i, padx=2, sticky="nsew")
-            
-            # Configure column weight for equal sizing
-            weekday_frame.columnconfigure(i, weight=1)
-            
-            # Day header with date
-            day_header = tk.Label(day_column, 
-                                 text=f"{day}\n{current_date.strftime('%m/%d')}",
-                                 font=("Helvetica", 10, "bold"),
-                                 bg="#f0f0f0")
-            day_header.pack(fill=tk.X, pady=2)
-            
-            ttk.Separator(day_column, orient='horizontal').pack(fill='x')
-            
-            # Add to list for adding events later
-            day_frames.append(day_column)
-        
-        # Add sample events to the calendar
-        events = [
-            # Monday events
-            {"day": 0, "text": "AAPL Earnings (After Close)", "color": "green"},
-            {"day": 0, "text": "Market Open 9:30 AM", "color": "black"},
-            
-            # Tuesday events
-            {"day": 1, "text": "CPI Data 8:30 AM", "color": "orange"},
-            {"day": 1, "text": "MSFT Earnings Call", "color": "green"},
-            
-            # Wednesday events
-            {"day": 2, "text": "FOMC Meeting", "color": "red"},
-            {"day": 2, "text": "TSLA Earnings", "color": "green"},
-            {"day": 2, "text": "Oil Inventory 10:30 AM", "color": "orange"},
-            
-            # Thursday events
-            {"day": 3, "text": "Jobless Claims 8:30 AM", "color": "orange"},
-            {"day": 3, "text": "AMZN Earnings (After Close)", "color": "green"},
-            
-            # Friday events
-            {"day": 4, "text": "GOOG Earnings", "color": "green"},
-            {"day": 4, "text": "PMI Data 9:45 AM", "color": "orange"}
-        ]
-        
-        # Add events to respective day columns
-        for event in events:
-            day_idx = event["day"]
-            if 0 <= day_idx < 5:  # Monday to Friday
-                event_label = tk.Label(day_frames[day_idx],
-                                     text=event["text"],
-                                     fg=event["color"],
-                                     bg="#f0f0f0",
-                                     font=("Helvetica", 9),
-                                     anchor="w")
-                event_label.pack(fill=tk.X, padx=2, pady=1, anchor="w")
-        
-        # =====================================================================
-        # NEWS SECTION
-        # =====================================================================
-        
-        # Add a refresh button
-        refresh_button = tk.Button(main_container, text="Refresh News", command=self.fetch_news, 
-                                  font=("Helvetica", 12), bg="#4CAF50", fg="white")
-        refresh_button.pack(pady=10)
-        
-        # Create a frame for the news items
-        self.news_frame = tk.Frame(main_container, bg="#f0f0f0")
-        self.news_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Initial news fetch
-        self.fetch_news()
+app = Flask(__name__)
+
+# API key (consider using environment variable in production)
+API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
+
+def predict_outcome(title):
+    """Simple sentiment analysis to predict outcome based on headline"""
+    positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
+                     'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
+    negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
+                     'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
     
-    def open_article(self, url):
-        webbrowser.open_new(url)
+    title_lower = title.lower()
     
-    def predict_outcome(self, title):
-        """Simple sentiment analysis to predict outcome based on headline"""
-        positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
-                         'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
-        negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
-                         'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
+    positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
+    negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
+    
+    if positive_count > negative_count:
+        return "📈 Positive", "green"
+    elif negative_count > positive_count:
+        return "📉 Negative", "red"
+    else:
+        return "⟷ Neutral", "amber"
+
+def get_market_events():
+    """Generate market events for the current week"""
+    # Get the current week's Monday date
+    today = datetime.now().date()
+    monday = today - timedelta(days=today.weekday())
+    
+    events = [
+        # Monday events
+        {"day": 0, "text": "AAPL Earnings (After Close)", "color": "green"},
+        {"day": 0, "text": "Market Open 9:30 AM", "color": "black"},
         
-        title_lower = title.lower()
+        # Tuesday events
+        {"day": 1, "text": "CPI Data 8:30 AM", "color": "orange"},
+        {"day": 1, "text": "MSFT Earnings Call", "color": "green"},
         
-        positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
-        negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
+        # Wednesday events
+        {"day": 2, "text": "FOMC Meeting", "color": "red"},
+        {"day": 2, "text": "TSLA Earnings", "color": "green"},
+        {"day": 2, "text": "Oil Inventory 10:30 AM", "color": "orange"},
         
-        if positive_count > negative_count:
-            return "📈 Positive", "#4CAF50"  # Green
-        elif negative_count > positive_count:
-            return "📉 Negative", "#F44336"  # Red
+        # Thursday events
+        {"day": 3, "text": "Jobless Claims 8:30 AM", "color": "orange"},
+        {"day": 3, "text": "AMZN Earnings (After Close)", "color": "green"},
+        
+        # Friday events
+        {"day": 4, "text": "GOOG Earnings", "color": "green"},
+        {"day": 4, "text": "PMI Data 9:45 AM", "color": "orange"}
+    ]
+    
+    # Prepare weekday labels with dates
+    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    formatted_events = []
+    
+    for i, day in enumerate(weekdays):
+        current_date = monday + timedelta(days=i)
+        day_events = [event for event in events if event['day'] == i]
+        formatted_events.append({
+            "day": day,
+            "date": current_date.strftime('%m/%d'),
+            "events": day_events
+        })
+    
+    return formatted_events
+
+def fetch_stock_news():
+    """Fetch stock news from Polygon API"""
+    # Get yesterday's date
+    yesterday = datetime.now() - timedelta(days=1)
+    date_from = yesterday.strftime("%Y-%m-%d")
+    
+    # Polygon API endpoint for market news
+    url = f"https://api.polygon.io/v2/reference/news?limit=10&order=desc&sort=published_utc&apiKey={API_KEY}"
+    
+    try:
+        response = requests.get(url)
+        data = response.json()
+        
+        if response.status_code == 200 and 'results' in data:
+            # Filter for major news (those with tickers mentioned)
+            major_news = [item for item in data['results'] if item.get('tickers') and len(item.get('tickers', [])) > 0]
+            
+            # Enrich news with sentiment prediction
+            for news in major_news:
+                outcome_text, outcome_color = predict_outcome(news.get('title', ''))
+                news['outcome_text'] = outcome_text
+                news['outcome_color'] = outcome_color
+                news['tickers_str'] = ", ".join(news.get('tickers', []))
+            
+            return major_news
         else:
-            return "⟷ Neutral", "#FFC107"  # Amber
+            return []
     
-    def fetch_news(self):
-        # Clear previous news
-        for widget in self.news_frame.winfo_children():
-            widget.destroy()
-        
-        # Get yesterday's date
-        yesterday = datetime.now() - timedelta(days=1)
-        date_from = yesterday.strftime("%Y-%m-%d")
-        
-        # Polygon API endpoint for market news
-        url = f"https://api.polygon.io/v2/reference/news?limit=10&order=desc&sort=published_utc&apiKey={self.api_key}"
-        
-        try:
-            response = requests.get(url)
-            data = response.json()
-            
-            if response.status_code == 200 and 'results' in data:
-                # Filter for major news (those with tickers mentioned)
-                major_news = [item for item in data['results'] if item.get('tickers') and len(item.get('tickers', [])) > 0]
-                
-                if not major_news:
-                    no_news_label = tk.Label(self.news_frame, text="No major stock news found", 
-                                           font=("Helvetica", 14), bg="#f0f0f0")
-                    no_news_label.pack(pady=20)
-                    return
-                
-                # Create a canvas with scrollbar
-                canvas = tk.Canvas(self.news_frame, bg="#f0f0f0")
-                scrollbar = ttk.Scrollbar(self.news_frame, orient="vertical", command=canvas.yview)
-                scrollable_frame = ttk.Frame(canvas)
-                
-                scrollable_frame.bind(
-                    "<Configure>",
-                    lambda e: canvas.configure(
-                        scrollregion=canvas.bbox("all")
-                    )
-                )
-                
-                canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-                canvas.configure(yscrollcommand=scrollbar.set)
-                
-                canvas.pack(side="left", fill="both", expand=True)
-                scrollbar.pack(side="right", fill="y")
-                
-                # Add news items to the scrollable frame
-                for i, news in enumerate(major_news[:10]):  # Limit to 10 items
-                    # Create a frame for each news item
-                    news_item_frame = ttk.Frame(scrollable_frame)
-                    news_item_frame.pack(fill="x", padx=5, pady=5)
-                    
-                    # Get tickers
-                    tickers = ", ".join(news.get('tickers', []))
-                    
-                    # Get expected outcome
-                    outcome_text, outcome_color = self.predict_outcome(news.get('title', ''))
-                    
-                    # Add ticker labels
-                    ticker_label = tk.Label(news_item_frame, text=f"Tickers: {tickers}", 
-                                         font=("Helvetica", 10, "bold"))
-                    ticker_label.pack(anchor="w")
-                    
-                    # Add headline as a clickable link
-                    headline_text = news.get('title', 'No headline available')
-                    headline_label = tk.Label(news_item_frame, text=headline_text, 
-                                           font=("Helvetica", 12), wraplength=700, 
-                                           cursor="hand2")
-                    headline_label.pack(anchor="w", pady=2)
-                    headline_label.bind("<Button-1>", lambda e, url=news.get('article_url'): self.open_article(url))
-                    
-                    # Add expected outcome
-                    outcome_label = tk.Label(news_item_frame, text=outcome_text, 
-                                          font=("Helvetica", 10, "bold"), fg=outcome_color)
-                    outcome_label.pack(anchor="w")
-                    
-                    # Add a separator
-                    if i < len(major_news) - 1:
-                        separator = ttk.Separator(scrollable_frame, orient='horizontal')
-                        separator.pack(fill='x', padx=5, pady=5)
-            
-            else:
-                error_label = tk.Label(self.news_frame, text=f"Error: {data.get('error', 'Unknown error')}", 
-                                     font=("Helvetica", 14), bg="#f0f0f0", fg="red")
-                error_label.pack(pady=20)
-        
-        except Exception as e:
-            error_label = tk.Label(self.news_frame, text=f"Error: {str(e)}", 
-                                 font=("Helvetica", 14), bg="#f0f0f0", fg="red")
-            error_label.pack(pady=20)
+    except Exception as e:
+        print(f"Error fetching news: {e}")
+        return []
 
+@app.route('/')
+def index():
+    """Render the main dashboard page"""
+    market_events = get_market_events()
+    return render_template('index.html', 
+                           market_events=market_events)
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = NewsApp(root, api_key="9skphQ6G7_rESW6iTNJDIAycT9gncpje")
-    root.mainloop()
+@app.route('/news')
+def news():
+    """Fetch and return stock news as JSON"""
+    news_items = fetch_stock_news()
+    return jsonify(news_items)
+
+if __name__ == '__main__':
+    # Ensure templates directory exists
+    os.makedirs('templates', exist_ok=True)
+    
+    # Create HTML template
+    with open('templates/index.html', 'w') as f:
+        f.write('''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stock News Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        #market-calendar {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .day-column {
+            flex: 1;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 0 5px;
+            background-color: white;
+        }
+        .day-header {
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        .event {
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+        #news-section {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+        }
+        .news-item {
+            border-bottom: 1px solid #eee;
+            padding: 10px 0;
+        }
+        .news-item:last-child {
+            border-bottom: none;
+        }
+        .news-headline {
+            cursor: pointer;
+            color: #1a73e8;
+        }
+        .news-headline:hover {
+            text-decoration: underline;
+        }
+        #refresh-btn {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Stock News Dashboard</h1>
+    
+    <div id="market-calendar">
+        {% for day in market_events %}
+        <div class="day-column">
+            <div class="day-header">{{ day.day }} ({{ day.date }})</div>
+            {% for event in day.events %}
+            <div class="event" style="color: {{ event.color }};">{{ event.text }}</div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+    
+    <button id="refresh-btn">Refresh News</button>
+    
+    <div id="news-section">
+        <h2>Latest Stock News</h2>
+        <div id="news-container"></div>
+    </div>
+
+    <script>
+        function fetchNews() {
+            fetch('/news')
+                .then(response => response.json())
+                .then(news => {
+                    const container = document.getElementById('news-container');
+                    container.innerHTML = ''; // Clear previous news
+                    
+                    if (news.length === 0) {
+                        container.innerHTML = '<p>No news available</p>';
+                        return;
+                    }
+                    
+                    news.forEach(item => {
+                        const newsItem = document.createElement('div');
+                        newsItem.className = 'news-item';
+                        
+                        newsItem.innerHTML = `
+                            <div>Tickers: ${item.tickers_str}</div>
+                            <div class="news-headline" onclick="window.open('${item.article_url}', '_blank')">
+                                ${item.title}
+                            </div>
+                            <div style="color: ${item.outcome_color};">${item.outcome_text}</div>
+                        `;
+                        
+                        container.appendChild(newsItem);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                });
+        }
+
+        // Fetch news on page load
+        fetchNews();
+
+        // Add event listener to refresh button
+        document.getElementById('refresh-btn').addEventListener('click', fetchNews);
+    </script>
+</body>
+</html>
+        ''')
+    
+    # Run the Flask app
+    app.run(debug=True)
