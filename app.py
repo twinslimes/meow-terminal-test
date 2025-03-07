@@ -708,7 +708,7 @@ def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_c
         st.markdown(f"<span style='color:{risk_color};font-weight:bold;font-size:20px;'>{risk_level} Risk</span> (Volatility: {ensemble.stock_data.volatility:.2f})", unsafe_allow_html=True)
     
     with col_rank2:
-        # Pass ensemble_result to the display_investment_summary function
+        # Display investment summary
         display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high) gauge chart for sentiment
         gauge = go.Figure(go.Indicator(
             mode = "gauge+number",
