@@ -3,16 +3,44 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import warnings
 import requests
 import re
+import json
 import time
 from datetime import datetime, timedelta
+import threading
 import yfinance as yf
+
+# Import local modules
+from data_utils import get_api_keys, fetch_additional_stock_data, calculate_technical_indicators
+from visualization import create_price_distribution_plot, create_model_comparison_plot, create_confidence_interval_plot
+from analysis import display_stock_analysis_section, display_technical_indicators_section, display_fundamental_analysis_section
+from day_trader import display_day_trader_section
+from backtesting import display_backtesting_section
+
+# Import all model classes from models.py
+from models import (
+    ModelType, StockData, StockPriceModel, GeometricBrownianMotion, 
+    AdvancedGBM, JumpDiffusionModel, HestonModel, GARCHModel,
+    RegimeSwitchingModel, QuasiMonteCarloModel, VarianceGammaModel, 
+    NeuralSDEModel, StockModelEnsemble, HAS_ARCH
+)
 
 # Polygon API key
 POLYGON_API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
 
-# Apply terminal-style CSS
+# Suppress warnings in the UI
+warnings.filterwarnings("ignore")
+
+# Set page config
+st.set_page_config(
+    page_title="Meow Terminal",
+    page_icon="😺",
+    layout="wide",
+)
+
+# Apply terminal-style CSS with black, blue, gray, and muted white-blue accents
 terminal_css = """
 <style>
     /* Main terminal theme */
@@ -21,67 +49,141 @@ terminal_css = """
     /* Global styles */
     html, body, [class*="css"] {
         font-family: 'VT323', monospace;
-        color: #ffffff;
-        caret-color: #4a90e2;
+        color: #ffffff; /* White text for readability on dark backgrounds */
+        caret-color: #4a90e2; /* Muted blue cursor for contrast */
     }
     
     /* Background and main container */
     .main {
-        background-color: #2f2f2f;
+        background-color: #2f2f2f; /* Dark gray background for uniformity */
         background-image: linear-gradient(rgba(74, 144, 226, 0.05) 50%, transparent 50%);
         background-size: 100% 4px;
     }
     
-    /* Windows 95-style elements */
-    div.stButton > button, .stSelectbox > div > div {
-        border: 2px solid #e6f3ff !important;
+    /* Old Windows style border (muted white-blue) */
+    div.stButton > button, .stSelectbox > div > div, div.stNumberInput > div > div {
+        border: 2px solid #e6f3ff !important; /* Muted white-blue border */
         border-right: 2px solid #000 !important;
         border-bottom: 2px solid #000 !important;
-        background-color: #4a90e2 !important;
-        color: #ffffff !important;
+        background-color: #4a90e2 !important; /* Muted blue for buttons */
+        color: #ffffff !important; /* White text for contrast */
         font-family: 'VT323', monospace !important;
         font-size: 18px !important;
     }
     
+    div.stButton > button:active {
+        border: 2px solid #000 !important;
+        border-right: 2px solid #e6f3ff !important;
+        border-bottom: 2px solid #e6f3ff !important;
+    }
+    
     /* Text inputs */
     div.stTextInput > div > div > input {
-        background-color: #2f2f2f;
-        color: #ffffff;
-        border: 1px solid #e6f3ff;
+        background-color: #2f2f2f; /* Dark gray background for inputs */
+        color: #ffffff; /* White text */
+        border: 1px solid #e6f3ff; /* Muted white-blue border */
         font-family: 'VT323', monospace !important;
+        font-size: 18px !important;
     }
     
     /* Metrics */
     div.stMetric > div {
-        background-color: #2f2f2f;
-        border: 1px solid #e6f3ff;
+        background-color: #2f2f2f; /* Dark gray background for metrics */
+        border: 1px solid #e6f3ff; /* Muted white-blue border */
         padding: 10px;
     }
     
     div.stMetric label {
-        color: #e6f3ff !important;
+        color: #e6f3ff !important; /* Muted white-blue labels */
     }
     
     /* Headers */
     h1, h2, h3, h4, h5, h6 {
-        color: #e6f3ff !important;
+        color: #e6f3ff !important; /* Muted white-blue for headers */
         font-family: 'VT323', monospace !important;
     }
     
-    /* Sidebar */
+    /* Sidebar (match main background for uniformity) */
     section[data-testid="stSidebar"] {
-        background-color: #2f2f2f;
-        border-right: 2px solid #e6f3ff;
+        background-color: #2f2f2f; /* Dark gray, matching main background */
+        border-right: 2px solid #e6f3ff; /* Muted white-blue border */
     }
     
-    /* Plotly charts */
+    section[data-testid="stSidebar"] h1, 
+    section[data-testid="stSidebar"] h2, 
+    section[data-testid="stSidebar"] .stSelectbox > div > div {
+        color: #e6f3ff !important; /* Muted white-blue text */
+    }
+    
+    section[data-testid="stSidebar"] .stSelectbox,
+    section[data-testid="stSidebar"] button {
+        font-family: 'VT323', monospace !important;
+    }
+    
+    /* Plotly charts background */
     .js-plotly-plot {
-        background-color: #2f2f2f !important;
+        background-color: #2f2f2f !important; /* Dark gray background for charts */
     }
     
-    /* Windows 95-style header */
+    /* Slider handle */
+    .stSlider > div > div > div > div {
+        background-color: #e6f3ff !important; /* Muted white-blue slider handle */
+    }
+    
+    /* CRT effect overlay (muted blue-gray) */
+    .main::before {
+        content: " ";
+        display: block;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        background: linear-gradient(rgba(74, 144, 226, 0) 50%, rgba(47, 47, 47, 0.15) 50%), 
+                    linear-gradient(90deg, rgba(74, 144, 226, 0.05), rgba(47, 47, 47, 0.02), rgba(74, 144, 226, 0.05));
+        z-index: 999;
+        background-size: 100% 2px, 3px 100%;
+        pointer-events: none;
+    }
+    
+    /* Terminal-style inputs and boxes */
+    div.stTextInput, div.stNumberInput {
+        background-color: #2f2f2f; /* Dark gray background for inputs */
+    }
+    
+    /* Tables with terminal styling */
+    div.stTable, div.dataframe {
+        background-color: #2f2f2f !important; /* Dark gray background for tables */
+        color: #ffffff !important; /* White text */
+        border: 1px solid #e6f3ff !important; /* Muted white-blue border */
+    }
+    
+    /* Tabs */
+    button[role="tab"] {
+        background-color: #2f2f2f !important; /* Dark gray background for tabs */
+        color: #e6f3ff !important; /* Muted white-blue text */
+        border: 1px solid #e6f3ff !important; /* Muted white-blue border */
+    }
+    
+    button[role="tab"][aria-selected="true"] {
+        background-color: #4a90e2 !important; /* Muted blue for selected tab */
+        border-bottom: 2px solid #e6f3ff !important; /* Muted white-blue border */
+    }
+    
+    div[role="tabpanel"] {
+        background-color: #2f2f2f !important; /* Dark gray background for tab panels */
+        border: 1px solid #e6f3ff !important; /* Muted white-blue border */
+    }
+    
+    /* Success/info messages */
+    div.stSuccessMessage, div.stInfoMessage {
+        background-color: #4a90e2 !important; /* Muted blue for messages */
+        color: #ffffff !important; /* White text */
+    }
+    
+    /* Windows 95-style title bar for sections */
     .win95-header {
-        background-color: #4a90e2;
+        background-color: #4a90e2; /* Muted blue for headers */
         color: #ffffff !important;
         font-weight: bold;
         padding: 2px 5px;
@@ -93,87 +195,53 @@ terminal_css = """
         margin-bottom: 5px;
     }
     
-    /* Dashboard widget */
-    .dashboard-widget {
-        border: 1px solid #4a90e2;
-        border-radius: 5px;
-        padding: 10px;
-        margin-bottom: 15px;
-        background-color: #2f2f2f;
+    /* Windows 95-style panel */
+    .win95-panel {
+        background-color: #2f2f2f; /* Dark gray for panels */
+        border-top: 2px solid #e6f3ff;
+        border-left: 2px solid #e6f3ff;
+        border-right: 2px solid #000000;
+        border-bottom: 2px solid #000000;
+        padding: 5px;
+        margin: 10px 0;
     }
     
-    /* Widget header */
-    .widget-header {
-        border-bottom: 1px solid #4a90e2;
-        margin-bottom: 10px;
-        padding-bottom: 5px;
-        color: #e6f3ff;
+    /* Expander styling */
+    details {
+        background-color: #2f2f2f !important; /* Dark gray background for expanders */
+        border: 1px solid #e6f3ff !important; /* Muted white-blue border */
+    }
+    
+    details summary {
+        color: #e6f3ff !important; /* Muted white-blue text */
+        font-family: 'VT323', monospace !important;
+    }
+    
+    /* Special terminal blinking cursor (muted white-blue) */
+    .terminal-cursor::after {
+        content: "▌";
+        animation: blink 1s step-end infinite;
         font-weight: bold;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+        color: #e6f3ff; /* Muted white-blue cursor */
     }
     
-    /* Stock price info */
-    .stock-up {
-        color: #4CAF50 !important;
+    @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
     }
     
-    .stock-down {
-        color: #F44336 !important;
+    /* Fix for checkbox color */
+    .stCheckbox label p {
+        color: #e6f3ff !important; /* Muted white-blue for checkboxes */
     }
-    
-    /* Scrollable container */
-    .scrollable {
-        max-height: 300px;
-        overflow-y: auto;
-        padding-right: 10px;
-    }
-    
-    /* Refresh indicator */
-    .refresh-indicator {
-        position: fixed;
-        top: 5px;
-        right: 10px;
-        color: #4a90e2;
-        font-size: 12px;
-        z-index: 1000;
-    }
-    
-    /* Signal badge */
-    .signal-badge {
-        display: inline-block;
-        padding: 3px 8px;
-        border-radius: 3px;
-        font-size: 14px;
-        margin: 2px;
-    }
-    
-    .signal-buy {
-        background-color: rgba(76, 175, 80, 0.3);
-        color: #4CAF50;
-        border: 1px solid #4CAF50;
-    }
-    
-    .signal-sell {
-        background-color: rgba(244, 67, 54, 0.3);
-        color: #F44336;
-        border: 1px solid #F44336;
-    }
-    
-    .signal-hold {
-        background-color: rgba(255, 193, 7, 0.3);
-        color: #FFC107;
-        border: 1px solid #FFC107;
-    }
-    
+
     /* News item styling */
     .news-item {
         background-color: #2f2f2f;
-        border: 1px solid #4a90e2;
+        border: 1px solid #e6f3ff;
         padding: 10px;
         margin-bottom: 10px;
-        border-radius: 5px;
+        font-family: 'VT323', monospace;
     }
     
     .news-ticker {
@@ -211,49 +279,140 @@ terminal_css = """
         color: #FFC107;
     }
     
-    /* Data tables */
-    .dataframe {
-        width: 100%;
+    /* Dashboard styles */
+    /* Dashboard cards */
+    .dashboard-card {
+        background-color: #2f2f2f;
+        border: 1px solid #e6f3ff;
+        border-radius: 5px;
+        padding: 10px;
+        margin-bottom: 10px;
+        height: 100%;
     }
     
-    .dataframe th {
-        background-color: #4a90e2;
-        color: white;
-        padding: 8px;
-        text-align: left;
+    /* Stock price info */
+    .stock-up {
+        color: #4CAF50 !important;
     }
     
-    .dataframe td {
-        padding: 8px;
-        border-bottom: 1px solid rgba(74, 144, 226, 0.3);
+    .stock-down {
+        color: #F44336 !important;
     }
     
-    /* Calendar event styling */
-    .calendar-event {
+    /* Scrollable container */
+    .scrollable {
+        max-height: 400px;
+        overflow-y: auto;
+        padding-right: 10px;
+    }
+    
+    /* Refresh indicator */
+    .refresh-indicator {
+        position: fixed;
+        top: 5px;
+        right: 10px;
+        color: #4a90e2;
+        font-size: 12px;
+        z-index: 1000;
+    }
+    
+    /* Watchlist item */
+    .watchlist-item {
+        display: flex;
+        justify-content: space-between;
         padding: 5px;
-        margin-bottom: 5px;
-        border-left: 3px solid #4a90e2;
-        background-color: rgba(74, 144, 226, 0.1);
+        border-bottom: 1px solid #4a90e2;
     }
     
-    .calendar-event-earnings {
-        border-left-color: #4CAF50;
+    /* Badge for indicators */
+    .signal-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 3px;
+        font-size: 14px;
+        margin: 2px;
     }
     
-    .calendar-event-dividend {
-        border-left-color: #FFC107;
+    .signal-buy {
+        background-color: rgba(76, 175, 80, 0.3);
+        color: #4CAF50;
+        border: 1px solid #4CAF50;
     }
     
-    .calendar-event-economic {
-        border-left-color: #F44336;
+    .signal-sell {
+        background-color: rgba(244, 67, 54, 0.3);
+        color: #F44336;
+        border: 1px solid #F44336;
     }
     
-    /* Portfolio styling */
-    .portfolio-summary {
-        margin-top: 10px;
-        padding-top: 10px;
-        border-top: 1px solid #4a90e2;
+    .signal-hold {
+        background-color: rgba(255, 193, 7, 0.3);
+        color: #FFC107;
+        border: 1px solid #FFC107;
+    }
+    
+    /* Custom column widths */
+    .custom-column {
+        float: left;
+        padding: 0 5px;
+        box-sizing: border-box;
+    }
+    
+    .col-20 {
+        width: 20%;
+    }
+    
+    .col-25 {
+        width: 25%;
+    }
+    
+    .col-33 {
+        width: 33.33%;
+    }
+    
+    .col-50 {
+        width: 50%;
+    }
+    
+    .col-66 {
+        width: 66.66%;
+    }
+    
+    .col-75 {
+        width: 75%;
+    }
+    
+    .col-80 {
+        width: 80%;
+    }
+    
+    /* Clear floats */
+    .row:after {
+        content: "";
+        display: table;
+        clear: both;
+    }
+    
+    /* Dashboard widget */
+    .dashboard-widget {
+        border: 1px solid #4a90e2;
+        border-radius: 5px;
+        padding: 10px;
+        margin-bottom: 10px;
+        background-color: #2f2f2f;
+        height: 100%;
+    }
+    
+    /* Widget header */
+    .widget-header {
+        border-bottom: 1px solid #4a90e2;
+        margin-bottom: 10px;
+        padding-bottom: 5px;
+        color: #e6f3ff;
         font-weight: bold;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
     }
 </style>
 """
@@ -262,7 +421,657 @@ terminal_css = """
 def win95_header(text):
     return f'<div class="win95-header">{text}</div>'
 
-# Functions to fetch data
+def display_homepage():
+    """Display the homepage of the application"""
+    st.markdown(terminal_css, unsafe_allow_html=True)
+    
+    # Title with terminal styling
+    st.markdown("<h1 style='color: #e6f3ff; text-align: center;'>🐱 Meow Terminal 🐱</h1>", unsafe_allow_html=True)
+    
+    # Button to enter app
+    if st.button("Enter Terminal", key="enter_app", use_container_width=True):
+        st.session_state.show_dashboard = True
+        st.rerun()
+    
+    # YouTube Video below button
+    st.video("https://www.youtube.com/watch?v=l9QTwRn_vmc&t=1s&ab_channel=twinslimes")  # User's actual video
+    
+    # Footer
+    st.markdown("""
+    <div style="margin-top: 20px; text-align: center; color: #e6f3ff; font-size: 12px;">
+        <p>© 2025 Meow Terminal</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def clear_analysis_results():
+    """Clear analysis results when stock data changes."""
+    # Clear prediction results
+    if 'ensemble' in st.session_state:
+        del st.session_state.ensemble
+    if 'ensemble_result' in st.session_state:
+        del st.session_state.ensemble_result
+    if 'target_price' in st.session_state:
+        del st.session_state.target_price
+    if 'T' in st.session_state:
+        del st.session_state.T
+
+def run_prediction_analysis(ticker, T, dt, M, target_price):
+    """Run stock price prediction analysis with selected models"""
+    if 'stock_data' not in st.session_state or st.session_state.stock_data is None:
+        st.warning("Please fetch stock data first.")
+        return
+    
+    stock_data = st.session_state.stock_data
+    
+    # Verify we're working with the correct ticker
+    if stock_data.ticker != ticker:
+        st.warning(f"Stock data is for {stock_data.ticker}, not {ticker}. Please fetch data for {ticker} first.")
+        return
+    
+    with st.spinner("Running simulations - this may take a minute..."):
+        # Create ensemble
+        ensemble = StockModelEnsemble(stock_data)
+        
+        # Add selected models to ensemble
+        if use_gbm:
+            ensemble.add_model(GeometricBrownianMotion(stock_data))
+        if use_advanced_gbm:
+            ensemble.add_model(AdvancedGBM(stock_data))
+        if use_qmc:
+            ensemble.add_model(QuasiMonteCarloModel(stock_data))
+        if use_jump:
+            ensemble.add_model(JumpDiffusionModel(stock_data))
+        if use_heston:
+            ensemble.add_model(HestonModel(stock_data))
+        if use_garch and HAS_ARCH:
+            ensemble.add_model(GARCHModel(stock_data))
+        if use_regime:
+            ensemble.add_model(RegimeSwitchingModel(stock_data))
+        if use_vg:
+            ensemble.add_model(VarianceGammaModel(stock_data))
+        if use_neural:
+            ensemble.add_model(NeuralSDEModel(stock_data))
+        
+        # Calibrate all models
+        ensemble.calibrate_all()
+        
+        # Run all simulations
+        ensemble.run_all_simulations(T, dt, M, target_price)
+        
+        # Compute ensemble forecast
+        ensemble_result = ensemble.compute_ensemble_forecast()
+        
+        # Store in session state
+        st.session_state.ensemble = ensemble
+        st.session_state.ensemble_result = ensemble_result
+        st.session_state.target_price = target_price
+        st.session_state.T = T
+        # Save current ticker to track if ticker changes
+        st.session_state.analysis_ticker = ticker
+    
+    st.success("Analysis completed!")
+    display_prediction_results()
+
+def predict_news_outcome(title):
+    """Simple sentiment analysis to predict outcome based on headline"""
+    positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
+                     'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
+    negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
+                     'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
+    
+    title_lower = title.lower()
+    
+    positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
+    negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
+    
+    if positive_count > negative_count:
+        return "📈 Positive", "news-positive"
+    elif negative_count > positive_count:
+        return "📉 Negative", "news-negative"
+    else:
+        return "⟷ Neutral", "news-neutral"
+
+def display_news_dashboard_section(ticker):
+    """Display the news dashboard section"""
+    st.markdown(win95_header(f"Market News Dashboard for {ticker}"), unsafe_allow_html=True)
+    
+    # Info text
+    st.markdown("<p>View the latest market news and sentiment analysis related to your selected stock.</p>", unsafe_allow_html=True)
+    
+    # Controls row
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        # Filter options
+        news_filter = st.selectbox(
+            "Filter by:",
+            ["All News", "Positive Only", "Negative Only", "Neutral Only"]
+        )
+    
+    with col2:
+        # Refresh button
+        if st.button("🔄 Refresh News", use_container_width=True):
+            st.experimental_rerun()
+    
+    # Get yesterday's date
+    yesterday = datetime.now() - timedelta(days=1)
+    date_from = yesterday.strftime("%Y-%m-%d")
+    
+    # Fetch news from Polygon API
+    with st.spinner("Fetching latest market news..."):
+        try:
+            # If a specific ticker is selected, use it to filter news
+            if ticker and ticker != "":
+                url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&order=desc&limit=10&sort=published_utc&apiKey={POLYGON_API_KEY}"
+            else:
+                url = f"https://api.polygon.io/v2/reference/news?limit=10&order=desc&sort=published_utc&apiKey={POLYGON_API_KEY}"
+            
+            response = requests.get(url)
+            data = response.json()
+            
+            if response.status_code == 200 and 'results' in data:
+                news_items = data['results']
+                
+                if not news_items:
+                    st.info("No news articles found for the selected ticker.")
+                else:
+                    # Process and display each news item
+                    for news in news_items:
+                        # Get sentiment prediction
+                        outcome_text, outcome_class = predict_news_outcome(news.get('title', ''))
+                        
+                        # Filter based on user selection
+                        if (news_filter == "Positive Only" and outcome_class != "news-positive") or \
+                           (news_filter == "Negative Only" and outcome_class != "news-negative") or \
+                           (news_filter == "Neutral Only" and outcome_class != "news-neutral"):
+                            continue
+                        
+                        # Get tickers for this news item
+                        tickers = news.get('tickers', [])
+                        ticker_str = ", ".join(tickers) if tickers else "N/A"
+                        
+                        # Format date
+                        published_date = datetime.fromisoformat(news.get('published_utc', '').replace('Z', '+00:00'))
+                        formatted_date = published_date.strftime("%Y-%m-%d %H:%M UTC")
+                        
+                        # Display news item in Windows 95 style box
+                        st.markdown(f"""
+                        <div class="news-item">
+                            <div class="news-ticker">Tickers: {ticker_str}</div>
+                            <a href="{news.get('article_url', '#')}" target="_blank" class="news-headline">{news.get('title', 'No headline available')}</a>
+                            <div>Published: {formatted_date}</div>
+                            <div class="news-outcome {outcome_class}">{outcome_text}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else:
+                st.error(f"Error fetching news: {data.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+    
+    # Additional info at the bottom
+    with st.expander("About News Sentiment Analysis"):
+        st.markdown("""
+        The news sentiment analysis uses a simple keyword-based approach to predict market impact:
+        
+        - **Positive**: Headlines containing terms like "rise," "gain," "beat," "bullish," etc.
+        - **Negative**: Headlines containing terms like "fall," "drop," "miss," "bearish," etc.
+        - **Neutral**: Headlines without clear positive or negative sentiment indicators
+        
+        This is a simplified analysis and should not be used as the sole basis for investment decisions.
+        """)
+
+def display_prediction_results():
+    """Display prediction results in main dashboard"""
+    # Check if we have analysis results
+    if 'ensemble' not in st.session_state or 'ensemble_result' not in st.session_state:
+        st.info("No analysis results available. Please run a prediction analysis.")
+        return
+        
+    ensemble = st.session_state.ensemble
+    ensemble_result = st.session_state.ensemble_result
+    target_price = st.session_state.target_price
+    T = st.session_state.get('T', 1.0)  # Get time horizon with default of 1.0
+    
+    # Verify we're displaying the correct ticker
+    current_ticker = st.session_state.get('current_ticker', '')
+    analysis_ticker = st.session_state.get('analysis_ticker', '')
+    
+    if current_ticker != analysis_ticker:
+        st.warning(f"The displayed analysis is for {analysis_ticker}, but the current selected ticker is {current_ticker}. Please run a new analysis.")
+        if st.button("Clear Analysis Results"):
+            clear_analysis_results()
+            st.rerun()
+        return
+    
+    st.markdown(win95_header("Probability Analysis Results"), unsafe_allow_html=True)
+    
+    col_prob1, col_prob2, col_prob3 = st.columns(3)
+    with col_prob1:
+        st.metric(
+            label="Average Price Probability", 
+            value=f"{ensemble_result['avg_probability']:.2f}%",
+            help="Probability that the average price over the time period will be at or above target"
+        )
+    with col_prob2:
+        st.metric(
+            label="Final Price Probability", 
+            value=f"{ensemble_result['final_probability']:.2f}%",
+            help="Probability that the price at the end of the time period will be at or above target"
+        )
+    with col_prob3:
+        st.metric(
+            label="Maximum Price Probability", 
+            value=f"{ensemble_result['max_probability']:.2f}%",
+            help="Probability that the maximum price during the time period will be at or above target"
+        )
+    
+    # Expected price and confidence interval
+    st.markdown(win95_header("Price Projections"), unsafe_allow_html=True)
+    ci_low, ci_high = ensemble_result['confidence_interval']
+    st.metric(
+        label="Expected Final Price", 
+        value=f"${ensemble_result['mean_price']:.2f}",
+        delta=f"95% CI: ${ci_low:.2f} to ${ci_high:.2f}"
+    )
+    
+    # User-friendly dashboard first, then detailed tabs
+    tab0, tab1, tab2, tab3 = st.tabs(["Dashboard", "Price Distribution", "Model Comparison", "Confidence Intervals"])
+    
+    with tab0:
+        # Create the user-friendly dashboard
+        st.markdown(win95_header(f"Investment Outlook for {ensemble.stock_data.ticker}"), unsafe_allow_html=True)
+        
+        # Determine sentiment
+        final_prob = ensemble_result['final_probability']
+        mean_price = ensemble_result['mean_price']
+        current_price = ensemble.stock_data.price
+        price_change_pct = (mean_price / current_price - 1) * 100
+        
+        # Create sentiment gauge and other dashboard elements
+        display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_change_pct, final_prob, mean_price, current_price, ci_low, ci_high)
+    
+    with tab1:
+        # Distribution of final prices
+        fig1 = create_price_distribution_plot(ensemble, target_price)
+        
+        # Update figure for terminal theme
+        fig1.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            title_font=dict(color='#e6f3ff'),
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+        )
+        
+        st.plotly_chart(fig1, use_container_width=True)
+        
+    with tab2:
+        # Model comparison bar chart
+        fig2 = create_model_comparison_plot(ensemble, target_price)
+        
+        # Update figure for terminal theme
+        fig2.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            title_font=dict(color='#e6f3ff'),
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+        )
+        
+        st.plotly_chart(fig2, use_container_width=True)
+        
+    with tab3:
+        # Confidence intervals by model
+        fig3 = create_confidence_interval_plot(ensemble, target_price)
+        
+        # Update figure for terminal theme
+        fig3.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            title_font=dict(color='#e6f3ff'),
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+        )
+        
+        st.plotly_chart(fig3, use_container_width=True)
+    
+    # Model weights
+    st.markdown(win95_header("Model Weights in Ensemble"), unsafe_allow_html=True)
+    model_weights_df = pd.DataFrame(
+        ensemble_result['model_ranking'], 
+        columns=["Model", "Weight (%)"]
+    )
+    st.dataframe(model_weights_df, use_container_width=True)
+
+def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_change_pct, final_prob, mean_price, current_price, ci_low, ci_high):
+    """Display dashboard gauges and summary"""
+    import plotly.graph_objects as go
+    
+    # Determine sentiment
+    if final_prob > 75:
+        sentiment = "Strongly Bullish"
+        sentiment_color = "#4a90e2"
+    elif final_prob > 55:
+        sentiment = "Moderately Bullish"
+        sentiment_color = "#6ab0ed"
+    elif final_prob > 45:
+        sentiment = "Neutral"
+        sentiment_color = "#808080"
+    elif final_prob > 25:
+        sentiment = "Moderately Bearish"
+        sentiment_color = "#8ab4f8"
+    else:
+        sentiment = "Strongly Bearish"
+        sentiment_color = "#2c5282"
+    
+    # Display sentiment
+    col_sent1, col_sent2 = st.columns([1, 2])
+    
+    with col_sent1:
+        # Create a gauge chart for sentiment
+        gauge = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = final_prob,
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': f"Outlook: {sentiment}", 'font': {'color': '#e6f3ff'}},
+            gauge = {
+                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': '#e6f3ff'},
+                'bar': {'color': sentiment_color},
+                'steps': [
+                    {'range': [0, 25], 'color': '#2f2f2f'},
+                    {'range': [25, 45], 'color': '#3f3f3f'},
+                    {'range': [45, 55], 'color': '#4f4f4f'},
+                    {'range': [55, 75], 'color': '#5f5f5f'},
+                    {'range': [75, 100], 'color': '#4a90e2'}
+                ],
+                'threshold': {
+                    'line': {'color': "#e6f3ff", 'width': 4},
+                    'thickness': 0.75,
+                    'value': final_prob
+                }
+            }
+        ))
+        
+        gauge.update_layout(
+            paper_bgcolor='#2f2f2f',
+            font={'color': '#e6f3ff'},
+            height=250
+        )
+        
+        st.plotly_chart(gauge, use_container_width=True)
+        
+        # Key insights box
+        st.markdown("""
+        <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f;">
+        <h3 style="color: #e6f3ff;">Key Insights</h3>
+        <ul style="color: #ffffff;">
+          <li><strong>Target Price:</strong> ${:.2f}</li>
+          <li><strong>Current Price:</strong> ${:.2f}</li>
+          <li><strong>Expected in {:.1f} years:</strong> ${:.2f} ({:.1f}%)</li>
+          <li><strong>Probability of reaching target:</strong> {:.1f}%</li>
+        </ul>
+        </div>
+        """.format(target_price, current_price, T, mean_price, price_change_pct, final_prob), 
+        unsafe_allow_html=True)
+    
+    with col_sent2:
+        # Create a simplified forecast chart
+        all_final_prices = []
+        for result in ensemble.results.values():
+            all_final_prices.extend(result['final_prices'][:1000])  # Limit to 1000 per model
+        
+        # Create histogram with density curve
+        fig = px.histogram(
+            all_final_prices, 
+            nbins=50,
+            title=f"Price Forecast Distribution in {T:.1f} Years",
+            opacity=0.7,
+            histnorm='probability density',
+            color_discrete_sequence=['#e6f3ff']
+        )
+        
+        fig.add_vline(x=current_price, line_color='#ffffff', line_dash='solid', 
+                      annotation_text="Current", annotation_position="top right", 
+                      annotation_font=dict(color='#e6f3ff'))
+                      
+        fig.add_vline(x=target_price, line_color='#8ab4f8', line_dash='dash', 
+                      annotation_text="Target", annotation_position="top right",
+                      annotation_font=dict(color='#e6f3ff'))
+                      
+        fig.add_vline(x=mean_price, line_color='#6ab0ed', line_dash='solid', 
+                      annotation_text="Expected", annotation_position="top right",
+                      annotation_font=dict(color='#e6f3ff'))
+        
+        # Add confidence interval
+        fig.add_vrect(
+            x0=ci_low, x1=ci_high,
+            fillcolor="#4a90e2", opacity=0.25,
+            layer="below", line_width=0,
+            annotation_text="95% Confidence Interval",
+            annotation_position="bottom right",
+            annotation_font=dict(color='#e6f3ff')
+        )
+        
+        fig.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            xaxis_title="Price ($)",
+            yaxis_title="Probability Density",
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            height=350
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Simplified model ranking and insights
+    st.markdown(win95_header("Model Insights"), unsafe_allow_html=True)
+    col_rank1, col_rank2 = st.columns(2)
+    
+    with col_rank1:
+        # Simple model weight ranking
+        model_weights = pd.DataFrame(
+            ensemble_result['model_ranking'][:5], 
+            columns=["Model", "Weight (%)"]
+        )
+        
+        st.markdown("<h3 style='color: #e6f3ff;'>Top 5 Models by Weight</h3>", unsafe_allow_html=True)
+        st.dataframe(model_weights, use_container_width=True, hide_index=True)
+        
+        # Risk assessment
+        risk_level = "High" if ensemble.stock_data.volatility > 0.3 else "Medium" if ensemble.stock_data.volatility > 0.15 else "Low"
+        risk_color = "#2c5282" if risk_level == "High" else "#8ab4f8" if risk_level == "Medium" else "#4a90e2"
+        
+        st.markdown("<h3 style='color: #e6f3ff;'>Risk Assessment</h3>", unsafe_allow_html=True)
+        st.markdown(f"<span style='color:{risk_color};font-weight:bold;font-size:20px;'>{risk_level} Risk</span> (Volatility: {ensemble.stock_data.volatility:.2f})", unsafe_allow_html=True)
+    
+    with col_rank2:
+        # Pass ensemble_result to the display_investment_summary function
+        display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high)
+
+def display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high):
+    """Display investment summary and recommendation"""
+    st.markdown("<h3 style='color: #e6f3ff;'>Investment Summary</h3>", unsafe_allow_html=True)
+    
+    # Generate a summary based on the analysis
+    if price_change_pct > 20:
+        growth_txt = "significant growth potential"
+    elif price_change_pct > 10:
+        growth_txt = "moderate growth potential"
+    elif price_change_pct > 0:
+        growth_txt = "slight growth potential"
+    elif price_change_pct > -10:
+        growth_txt = "slight downside risk"
+    else:
+        growth_txt = "significant downside risk"
+    
+    if final_prob > 70:
+        prob_txt = "high probability"
+    elif final_prob > 50:
+        prob_txt = "moderate probability"
+    elif final_prob > 30:
+        prob_txt = "low probability"
+    else:
+        prob_txt = "very low probability"
+    
+    # Summary text
+    summary = f"""
+    <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f; font-family: 'VT323', monospace;">
+    {ensemble.stock_data.ticker} shows {growth_txt} over the next {T:.1f} years, with a {prob_txt} ({final_prob:.1f}%) 
+    of reaching the target price of ${target_price:.2f}. The expected price is ${mean_price:.2f}, 
+    representing a {price_change_pct:.1f}% change from the current price of ${current_price:.2f}.
+    <br><br>
+    The 95% confidence interval ranges from ${ci_low:.2f} to ${ci_high:.2f}, indicating the range of 
+    likely outcomes based on our multi-model ensemble approach.
+    <br><br>
+    This forecast is based on an ensemble of {len(ensemble.models)} advanced financial models, with 
+    the most influential being {ensemble_result['model_ranking'][0][0]}.
+    </div>
+    """
+    
+    st.markdown(summary, unsafe_allow_html=True)
+    
+    # Investment recommendation
+    if final_prob > 60 and price_change_pct > 15:
+        recommendation = "Strong Buy"
+        rec_color = "#4a90e2"
+    elif final_prob > 50 and price_change_pct > 10:
+        recommendation = "Buy"
+        rec_color = "#6ab0ed"
+    elif final_prob > 40 and price_change_pct > 0:
+        recommendation = "Hold"
+        rec_color = "#808080"
+    elif final_prob > 30:
+        recommendation = "Reduce"
+        rec_color = "#8ab4f8"
+    else:
+        recommendation = "Sell"
+        rec_color = "#2c5282"
+    
+    st.markdown("<h3 style='color: #e6f3ff;'>Recommendation</h3>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align: center; border: 1px solid #e6f3ff; padding: 5px; background-color: #2f2f2f;'><span style='color:{rec_color};font-weight:bold;font-size:24px;'>{recommendation}</span></div>", unsafe_allow_html=True)
+
+def display_basic_dashboard(ticker):
+    """Display basic dashboard with current price and chart"""
+    if 'stock_data' in st.session_state and st.session_state.stock_data:
+        stock_data = st.session_state.stock_data
+        
+        # Verify we're displaying data for the correct ticker
+        if stock_data.ticker != ticker:
+            st.warning(f"Displaying data for {stock_data.ticker}, but the current selected ticker is {ticker}. Please fetch data for {ticker}.")
+            return
+        
+        # Display current price and basic metrics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(label="Current Price", value=f"${stock_data.price:.2f}")
+        
+        with col2:
+            st.metric(label="Annual Volatility", value=f"{stock_data.volatility:.2f}")
+        
+        with col3:
+            # Calculate implied cost of equity
+            implied_coe = stock_data.risk_free_rate + stock_data.volatility * 0.5
+            st.metric(label="Implied Cost of Equity", value=f"{implied_coe*100:.2f}%")
+        
+        # Show historical price chart
+        if stock_data.historical_data is not None:
+            hist_data = stock_data.historical_data
+            if 'Close' in hist_data.columns:
+                fig = px.line(hist_data['Close'], title=f"{ticker} Historical Price")
+                
+                # Update figure for terminal theme
+                fig.update_layout(
+                    paper_bgcolor='#2f2f2f',
+                    plot_bgcolor='#2f2f2f',
+                    font=dict(color='#ffffff'),
+                    title_font=dict(color='#e6f3ff'),
+                    xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+                    yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+                )
+                fig.update_traces(line_color='#e6f3ff')
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+        # Prediction model parameters
+        st.markdown(win95_header("Price Prediction"), unsafe_allow_html=True)
+        st.markdown("<p style='color: #ffffff;'>Use the controls below to set up and run a price prediction analysis.</p>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            T = st.slider("Time Horizon (years)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+            st.session_state.T = T  # Store in session state for later use
+        
+        with col2:
+            # Get current price from session
+            current_price = stock_data.price
+            
+            # Target price input
+            target_price = st.number_input(
+                "Target Price ($)", 
+                min_value=float(current_price * 0.5), 
+                max_value=float(current_price * 2.0), 
+                value=float(current_price * 1.2),
+                step=0.01
+            )
+        
+        # Calculate implied return
+        implied_return = (target_price / current_price - 1) * 100
+        annual_return = ((target_price / current_price) ** (1/T) - 1) * 100
+        
+        st.metric(
+            label="Implied Total Return", 
+            value=f"{implied_return:.2f}%",
+            delta=f"{annual_return:.2f}% annually"
+        )
+        
+        # Model selection
+        st.markdown(win95_header("Select Models to Include"), unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            global use_gbm, use_advanced_gbm, use_qmc
+            use_gbm = st.checkbox("Geometric Brownian Motion", value=True)
+            use_advanced_gbm = st.checkbox("Advanced GBM", value=True)
+            use_qmc = st.checkbox("Quasi Monte Carlo", value=True)
+        
+        with col2:
+            global use_jump, use_heston, use_garch
+            use_jump = st.checkbox("Jump Diffusion", value=True)
+            use_heston = st.checkbox("Heston Stochastic Volatility", value=True)
+            use_garch = st.checkbox("GARCH Volatility", value=HAS_ARCH)
+        
+        with col3:
+            global use_regime, use_vg, use_neural
+            use_regime = st.checkbox("Regime Switching", value=True)
+            use_vg = st.checkbox("Variance Gamma", value=True)
+            use_neural = st.checkbox("Neural SDE", value=True)
+        
+        # Advanced settings
+        with st.expander("Advanced Settings", expanded=False):
+            M = st.slider("Number of Simulations", min_value=1000, max_value=10000, value=5000, step=1000)
+            dt = st.select_slider(
+                "Time Step", 
+                options=[1/252, 1/52, 1/26, 1/12], 
+                value=1/12, 
+                format_func=lambda x: f"{int(1/x)} times per year"
+            )
+        
+        # Button to run simulations
+        st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+        if st.button("Run Probability Analysis", key="run_analysis", use_container_width=True):
+            run_prediction_analysis(ticker, T, dt, M, target_price)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# Dashboard functions
 def fetch_stock_data(ticker_list):
     """Fetch current stock data for watchlist"""
     result = {}
@@ -283,20 +1092,12 @@ def fetch_stock_data(ticker_list):
             try:
                 if isinstance(tickers_data, pd.DataFrame):
                     # Single ticker case
-                    if len(tickers_data) >= 2:
-                        current_price = tickers_data['Close'].iloc[-1]
-                        prev_price = tickers_data['Close'].iloc[-2]
-                    else:
-                        current_price = tickers_data['Close'].iloc[-1]
-                        prev_price = tickers_data['Open'].iloc[-1]
+                    current_price = tickers_data['Close'].iloc[-1]
+                    prev_price = tickers_data['Close'].iloc[-2]
                 else:
                     # Multiple tickers case
-                    if len(tickers_data[ticker]['Close']) >= 2:
-                        current_price = tickers_data[ticker]['Close'].iloc[-1]
-                        prev_price = tickers_data[ticker]['Close'].iloc[-2]
-                    else:
-                        current_price = tickers_data[ticker]['Close'].iloc[-1]
-                        prev_price = tickers_data[ticker]['Open'].iloc[-1]
+                    current_price = tickers_data[ticker]['Close'].iloc[-1]
+                    prev_price = tickers_data[ticker]['Close'].iloc[-2]
                 
                 change = current_price - prev_price
                 change_pct = (change / prev_price) * 100
@@ -368,19 +1169,11 @@ def fetch_market_indices():
         for ticker, name in indices.items():
             try:
                 if len(data.columns.levels) > 1:  # Multiple tickers
-                    if len(data[ticker]['Close']) >= 2:
-                        current_price = data[ticker]['Close'].iloc[-1]
-                        prev_price = data[ticker]['Close'].iloc[-2]
-                    else:
-                        current_price = data[ticker]['Close'].iloc[-1]
-                        prev_price = data[ticker]['Open'].iloc[-1]
+                    current_price = data[ticker]['Close'].iloc[-1]
+                    prev_price = data[ticker]['Close'].iloc[-2]
                 else:  # Single ticker
-                    if len(data['Close']) >= 2:
-                        current_price = data['Close'].iloc[-1]
-                        prev_price = data['Close'].iloc[-2]
-                    else:
-                        current_price = data['Close'].iloc[-1]
-                        prev_price = data['Open'].iloc[-1]
+                    current_price = data['Close'].iloc[-1]
+                    prev_price = data['Close'].iloc[-2]
                 
                 change = current_price - prev_price
                 change_pct = (change / prev_price) * 100
@@ -404,7 +1197,7 @@ def fetch_market_indices():
     
     return result
 
-def fetch_latest_news(tickers=None, limit=15):
+def fetch_latest_news(tickers=None, limit=10):
     """Fetch latest stock market news"""
     try:
         # If tickers provided, fetch news for those tickers
@@ -446,49 +1239,6 @@ def fetch_latest_news(tickers=None, limit=15):
     except Exception as e:
         st.error(f"Error fetching news: {str(e)}")
         return []
-
-def predict_news_outcome(title):
-    """Simple sentiment analysis to predict outcome based on headline"""
-    positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
-                     'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
-    negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
-                     'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
-    
-    title_lower = title.lower()
-    
-    positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
-    negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
-    
-    if positive_count > negative_count:
-        return "📈 Positive", "news-positive"
-    elif negative_count > positive_count:
-        return "📉 Negative", "news-negative"
-    else:
-        return "⟷ Neutral", "news-neutral"
-
-def fetch_economic_calendar():
-    """Generate a simulated economic calendar"""
-    today = datetime.now()
-    
-    # Generate next 7 days
-    calendar = []
-    
-    # Sample events
-    events = [
-        {"type": "earnings", "title": "AAPL Earnings", "date": today + timedelta(days=2)},
-        {"type": "earnings", "title": "MSFT Earnings", "date": today + timedelta(days=4)},
-        {"type": "economic", "title": "Fed Rate Decision", "date": today + timedelta(days=3)},
-        {"type": "economic", "title": "Jobs Report", "date": today + timedelta(days=5)},
-        {"type": "dividend", "title": "JNJ Ex-Dividend", "date": today + timedelta(days=1)},
-        {"type": "economic", "title": "CPI Data Release", "date": today + timedelta(days=6)},
-        {"type": "earnings", "title": "GOOGL Earnings", "date": today + timedelta(days=3)},
-        {"type": "dividend", "title": "PG Ex-Dividend", "date": today + timedelta(days=2)}
-    ]
-    
-    # Sort by date
-    events.sort(key=lambda x: x["date"])
-    
-    return events[:7]  # Return the closest 7 events
 
 def calculate_signals(ticker):
     """Calculate technical signals for a stock"""
@@ -577,7 +1327,7 @@ def calculate_signals(ticker):
     except Exception as e:
         return {"error": str(e)}
 
-def refresh_all_data():
+def refresh_dashboard_data():
     """Refresh all dashboard data"""
     if 'refresh_counter' not in st.session_state:
         st.session_state.refresh_counter = 0
@@ -586,92 +1336,21 @@ def refresh_all_data():
     st.session_state.last_refresh = datetime.now()
     
     # Fetch stock data for watchlist
-    st.session_state.stock_data = fetch_stock_data(st.session_state.watchlist)
+    st.session_state.dashboard_stock_data = fetch_stock_data(st.session_state.watchlist)
     
     # Fetch market indices
-    st.session_state.market_indices = fetch_market_indices()
+    st.session_state.dashboard_market_indices = fetch_market_indices()
     
     # Fetch news data - prioritize watchlist stocks
-    st.session_state.news_data = fetch_latest_news(st.session_state.watchlist, 20)
+    st.session_state.dashboard_news_data = fetch_latest_news(st.session_state.watchlist, 20)
     
     # Calculate signals for watchlist stocks
     signals = {}
     for ticker in st.session_state.watchlist:
         signals[ticker] = calculate_signals(ticker)
-    st.session_state.signals_data = signals
-    
-    # Fetch economic calendar
-    st.session_state.calendar_data = fetch_economic_calendar()
-    
-    # Update portfolio values
-    if 'portfolio' in st.session_state:
-        for ticker, position in st.session_state.portfolio.items():
-            if ticker in st.session_state.stock_data:
-                current_price = st.session_state.stock_data[ticker]['price']
-                position['current_price'] = current_price
-                position['current_value'] = current_price * position['shares']
-                position['gain_loss'] = position['current_value'] - position['cost_basis']
-                position['gain_loss_pct'] = (position['gain_loss'] / position['cost_basis']) * 100 if position['cost_basis'] > 0 else 0
+    st.session_state.dashboard_signals_data = signals
 
-def initialize_demo_portfolio():
-    """Initialize a demo portfolio for visualization"""
-    if 'portfolio' not in st.session_state:
-        st.session_state.portfolio = {
-            "AAPL": {
-                "shares": 10,
-                "avg_price": 175.50,
-                "cost_basis": 1755.00,
-                "current_price": 0.0,
-                "current_value": 0.0,
-                "gain_loss": 0.0,
-                "gain_loss_pct": 0.0
-            },
-            "MSFT": {
-                "shares": 5,
-                "avg_price": 350.25,
-                "cost_basis": 1751.25,
-                "current_price": 0.0,
-                "current_value": 0.0,
-                "gain_loss": 0.0,
-                "gain_loss_pct": 0.0
-            },
-            "TSLA": {
-                "shares": 8,
-                "avg_price": 220.75,
-                "cost_basis": 1766.00,
-                "current_price": 0.0,
-                "current_value": 0.0,
-                "gain_loss": 0.0,
-                "gain_loss_pct": 0.0
-            }
-        }
-
-def get_portfolio_summary():
-    """Calculate portfolio summary statistics"""
-    if 'portfolio' not in st.session_state:
-        return {
-            'total_value': 0.0,
-            'total_cost': 0.0,
-            'total_gain_loss': 0.0,
-            'total_gain_loss_pct': 0.0
-        }
-    
-    portfolio = st.session_state.portfolio
-    
-    # Calculate totals
-    total_value = sum(pos['current_value'] for pos in portfolio.values())
-    total_cost = sum(pos['cost_basis'] for pos in portfolio.values())
-    total_gain_loss = total_value - total_cost
-    total_gain_loss_pct = (total_gain_loss / total_cost) * 100 if total_cost > 0 else 0
-    
-    return {
-        'total_value': total_value,
-        'total_cost': total_cost,
-        'total_gain_loss': total_gain_loss,
-        'total_gain_loss_pct': total_gain_loss_pct
-    }
-
-def display_watchlist_manager():
+def display_watchlist_widget():
     """Display watchlist management widget"""
     st.markdown('<div class="dashboard-widget">', unsafe_allow_html=True)
     st.markdown('<div class="widget-header">Watchlist Manager</div>', unsafe_allow_html=True)
@@ -681,30 +1360,30 @@ def display_watchlist_manager():
     if st.button("Add", key="add_button") and new_ticker:
         if new_ticker not in st.session_state.watchlist:
             st.session_state.watchlist.append(new_ticker)
-            st.rerun()
+            st.experimental_rerun()
     
     # Show current watchlist with remove buttons
-    st.markdown('<div class="scrollable">', unsafe_allow_html=True)
+    st.markdown('<div class="scrollable" style="max-height: 200px;">', unsafe_allow_html=True)
     for i, ticker in enumerate(st.session_state.watchlist):
         col1, col2 = st.columns([4, 1])
         with col1:
-            st.markdown(f"<div style='padding: 5px; border-bottom: 1px solid #4a90e2;'>{ticker}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='watchlist-item'>{ticker}</div>", unsafe_allow_html=True)
         with col2:
             if st.button("🗑️", key=f"remove_{i}"):
                 st.session_state.watchlist.remove(ticker)
-                st.rerun()
+                st.experimental_rerun()
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Reset to default button
     if st.button("Reset to Default"):
         st.session_state.watchlist = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
-        st.rerun()
+        st.experimental_rerun()
     
     st.markdown('</div>', unsafe_allow_html=True)
 
 def display_stock_price_widget():
     """Display stock prices widget"""
-    stock_data = st.session_state.stock_data
+    stock_data = st.session_state.dashboard_stock_data
     
     st.markdown('<div class="dashboard-widget">', unsafe_allow_html=True)
     st.markdown('<div class="widget-header">Watchlist Prices</div>', unsafe_allow_html=True)
@@ -712,47 +1391,29 @@ def display_stock_price_widget():
     if not stock_data:
         st.markdown("No stock data available.", unsafe_allow_html=True)
     else:
-        stock_table_html = """
-        <table class="dataframe" style="width:100%">
-            <tr>
-                <th>Ticker</th>
-                <th>Price</th>
-                <th>Change</th>
-                <th>Change %</th>
-            </tr>
-        """
-        
         for ticker, data in stock_data.items():
             if 'error' in data:
-                stock_table_html += f"""
-                <tr>
-                    <td>{ticker}</td>
-                    <td colspan="3">Error fetching data</td>
-                </tr>
-                """
+                st.markdown(f"<div>{ticker}: Error fetching data</div>", unsafe_allow_html=True)
                 continue
                 
             # Determine color based on price change
             color_class = "stock-up" if data['change'] >= 0 else "stock-down"
             change_sign = "+" if data['change'] >= 0 else ""
             
-            stock_table_html += f"""
-            <tr>
-                <td><b>{ticker}</b></td>
-                <td>${data['price']:.2f}</td>
-                <td class="{color_class}">{change_sign}{data['change']:.2f}</td>
-                <td class="{color_class}">{change_sign}{data['change_pct']:.2f}%</td>
-            </tr>
-            """
-        
-        stock_table_html += "</table>"
-        st.markdown(stock_table_html, unsafe_allow_html=True)
+            # Create stock price display
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid #4a90e2;">
+                <div style="font-weight: bold;">{ticker}</div>
+                <div>${data['price']:.2f}</div>
+                <div class="{color_class}">{change_sign}{data['change']:.2f} ({change_sign}{data['change_pct']:.2f}%)</div>
+            </div>
+            """, unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
 def display_market_overview_widget():
     """Display market overview widget"""
-    market_data = st.session_state.market_indices
+    market_data = st.session_state.dashboard_market_indices
     
     st.markdown('<div class="dashboard-widget">', unsafe_allow_html=True)
     st.markdown('<div class="widget-header">Market Overview</div>', unsafe_allow_html=True)
@@ -760,113 +1421,23 @@ def display_market_overview_widget():
     if not market_data:
         st.markdown("No market data available.", unsafe_allow_html=True)
     else:
-        # Create columns for each index
-        cols = st.columns(len(market_data))
-        
-        for i, (index, data) in enumerate(market_data.items()):
-            with cols[i]:
-                if 'error' in data:
-                    st.error(f"{index}: Error fetching data")
-                else:
-                    # Determine color based on price change
-                    delta_color = "normal" if data['change_pct'] >= 0 else "inverse"
-                    delta = f"{'+' if data['change_pct'] >= 0 else ''}{data['change_pct']:.2f}%"
-                    
-                    st.metric(
-                        label=index,
-                        value=f"{data['price']:.2f}",
-                        delta=delta,
-                        delta_color=delta_color
-                    )
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-def display_portfolio_widget():
-    """Display portfolio tracking widget"""
-    # Initialize demo portfolio
-    initialize_demo_portfolio()
-    portfolio = st.session_state.portfolio
-    
-    st.markdown('<div class="dashboard-widget">', unsafe_allow_html=True)
-    st.markdown('<div class="widget-header">Portfolio Tracker</div>', unsafe_allow_html=True)
-    
-    # Get portfolio summary
-    summary = get_portfolio_summary()
-    
-    # Display summary metrics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Value", f"${summary['total_value']:.2f}")
-    with col2:
-        st.metric("Total Cost", f"${summary['total_cost']:.2f}")
-    with col3:
-        delta = f"{'+' if summary['total_gain_loss'] >= 0 else ''}{summary['total_gain_loss_pct']:.2f}%"
-        delta_color = "normal" if summary['total_gain_loss'] >= 0 else "inverse"
-        st.metric("Gain/Loss", f"${summary['total_gain_loss']:.2f}", delta=delta, delta_color=delta_color)
-    
-    # Display portfolio table
-    portfolio_table_html = """
-    <table class="dataframe" style="width:100%">
-        <tr>
-            <th>Ticker</th>
-            <th>Shares</th>
-            <th>Avg Price</th>
-            <th>Current</th>
-            <th>Value</th>
-            <th>Gain/Loss</th>
-        </tr>
-    """
-    
-    for ticker, position in portfolio.items():
-        # Determine color based on gain/loss
-        color_class = "stock-up" if position['gain_loss'] >= 0 else "stock-down"
-        change_sign = "+" if position['gain_loss'] >= 0 else ""
-        
-        portfolio_table_html += f"""
-        <tr>
-            <td><b>{ticker}</b></td>
-            <td>{position['shares']}</td>
-            <td>${position['avg_price']:.2f}</td>
-            <td>${position['current_price']:.2f}</td>
-            <td>${position['current_value']:.2f}</td>
-            <td class="{color_class}">{change_sign}${position['gain_loss']:.2f} ({change_sign}{position['gain_loss_pct']:.2f}%)</td>
-        </tr>
-        """
-    
-    portfolio_table_html += "</table>"
-    st.markdown(portfolio_table_html, unsafe_allow_html=True)
-    
-    # Add position option
-    with st.expander("Add New Position"):
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            new_ticker = st.text_input("Ticker", key="portfolio_ticker").upper()
-        with col2:
-            new_shares = st.number_input("Shares", min_value=0.01, step=1.0, key="portfolio_shares")
-        with col3:
-            new_price = st.number_input("Avg Price ($)", min_value=0.01, step=1.0, key="portfolio_price")
-        
-        if st.button("Add Position", key="add_position_button"):
-            if new_ticker and new_shares > 0 and new_price > 0:
-                cost_basis = new_shares * new_price
+        for index, data in market_data.items():
+            if 'error' in data:
+                st.markdown(f"<div>{index}: Error fetching data</div>", unsafe_allow_html=True)
+                continue
                 
-                # Add to portfolio
-                st.session_state.portfolio[new_ticker] = {
-                    "shares": new_shares,
-                    "avg_price": new_price,
-                    "cost_basis": cost_basis,
-                    "current_price": 0.0,
-                    "current_value": 0.0,
-                    "gain_loss": 0.0,
-                    "gain_loss_pct": 0.0
-                }
-                
-                # Add to watchlist if not already there
-                if new_ticker not in st.session_state.watchlist:
-                    st.session_state.watchlist.append(new_ticker)
-                
-                st.rerun()
+            # Determine color based on price change
+            color_class = "stock-up" if data['change'] >= 0 else "stock-down"
+            change_sign = "+" if data['change'] >= 0 else ""
+            
+            # Create market index display
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid #4a90e2;">
+                <div style="font-weight: bold;">{index}</div>
+                <div>{data['price']:.2f}</div>
+                <div class="{color_class}">{change_sign}{data['change']:.2f} ({change_sign}{data['change_pct']:.2f}%)</div>
+            </div>
+            """, unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -876,19 +1447,15 @@ def display_stock_charts_widget():
     st.markdown('<div class="widget-header">Stock Charts</div>', unsafe_allow_html=True)
     
     # Select stock for detailed chart
-    col1, col2 = st.columns([3, 1])
+    selected_ticker = st.selectbox("Select stock:", st.session_state.watchlist, key="chart_ticker")
     
-    with col1:
-        selected_ticker = st.selectbox("Select stock:", st.session_state.watchlist, key="chart_ticker")
-    
-    with col2:
-        # Select timeframe
-        timeframe = st.radio(
-            "Timeframe:",
-            ["1D", "5D", "1M"],
-            horizontal=True,
-            key="chart_timeframe"
-        )
+    # Select timeframe
+    timeframe = st.radio(
+        "Timeframe:",
+        ["1D", "5D", "1M"],
+        horizontal=True,
+        key="chart_timeframe"
+    )
     
     # Determine parameters based on timeframe
     if timeframe == "1D":
@@ -981,7 +1548,7 @@ def display_stock_charts_widget():
 
 def display_news_widget():
     """Display news widget"""
-    news_data = st.session_state.news_data
+    news_data = st.session_state.dashboard_news_data
     
     st.markdown('<div class="dashboard-widget">', unsafe_allow_html=True)
     st.markdown('<div class="widget-header">Latest Market News</div>', unsafe_allow_html=True)
@@ -990,11 +1557,11 @@ def display_news_widget():
     news_filter = st.selectbox(
         "Filter by:",
         ["All News", "Positive Only", "Negative Only", "Neutral Only"],
-        key="news_filter"
+        key="dashboard_news_filter"
     )
     
     if not news_data:
-        st.markdown("No news available. Please refresh the dashboard.", unsafe_allow_html=True)
+        st.markdown("No news available.", unsafe_allow_html=True)
     else:
         st.markdown('<div class="scrollable">', unsafe_allow_html=True)
         
@@ -1029,16 +1596,16 @@ def display_news_widget():
 
 def display_signals_widget():
     """Display technical signals widget"""
-    signals_data = st.session_state.signals_data
+    signals_data = st.session_state.dashboard_signals_data
     
     st.markdown('<div class="dashboard-widget">', unsafe_allow_html=True)
     st.markdown('<div class="widget-header">Technical Signals</div>', unsafe_allow_html=True)
     
     # Select stock for signals
-    selected_ticker = st.selectbox("Select stock:", st.session_state.watchlist, key="signals_ticker")
+    selected_ticker = st.selectbox("Select stock:", st.session_state.watchlist, key="dashboard_signals_ticker")
     
     if selected_ticker not in signals_data:
-        st.markdown("No signal data available. Please refresh the dashboard.", unsafe_allow_html=True)
+        st.markdown("No signal data available.", unsafe_allow_html=True)
     elif 'error' in signals_data[selected_ticker]:
         st.markdown(f"Error: {signals_data[selected_ticker]['error']}", unsafe_allow_html=True)
     else:
@@ -1059,31 +1626,19 @@ def display_signals_widget():
         # Display individual signals
         st.markdown("<div style='margin-top: 15px;'>", unsafe_allow_html=True)
         
-        signals_table_html = """
-        <table class="dataframe" style="width:100%">
-            <tr>
-                <th>Indicator</th>
-                <th>Signal</th>
-                <th>Message</th>
-            </tr>
-        """
-        
         for key, signal in signals.items():
             if key in ['OVERALL', 'values']:
                 continue
                 
             signal_class = "signal-buy" if signal['signal'] == "BUY" else "signal-sell" if signal['signal'] == "SELL" else "signal-hold"
             
-            signals_table_html += f"""
-            <tr>
-                <td><b>{key}</b></td>
-                <td><span class="signal-badge {signal_class}">{signal['signal']}</span></td>
-                <td>{signal['message']}</td>
-            </tr>
-            """
-        
-        signals_table_html += "</table>"
-        st.markdown(signals_table_html, unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px solid #4a90e2;">
+                <div style="font-weight: bold;">{key}</div>
+                <div class="signal-badge {signal_class}">{signal['signal']}</div>
+                <div>{signal['message']}</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         st.markdown("</div>", unsafe_allow_html=True)
         
@@ -1108,177 +1663,255 @@ def display_signals_widget():
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-def display_calendar_widget():
-    """Display economic calendar widget"""
-    calendar_data = st.session_state.calendar_data
-    
-    st.markdown('<div class="dashboard-widget">', unsafe_allow_html=True)
-    st.markdown('<div class="widget-header">Economic Calendar</div>', unsafe_allow_html=True)
-    
-    if not calendar_data:
-        st.markdown("No calendar data available.", unsafe_allow_html=True)
+def display_dashboard_settings(sidebar=True):
+    """Display dashboard settings sidebar"""
+    if sidebar:
+        settings_container = st.sidebar
     else:
-        for event in calendar_data:
-            event_type_class = f"calendar-event-{event['type']}"
-            event_date = event['date'].strftime("%a, %b %d")
-            
-            st.markdown(f"""
-            <div class="calendar-event {event_type_class}">
-                <div style="display: flex; justify-content: space-between;">
-                    <span><b>{event['title']}</b></span>
-                    <span>{event_date}</span>
-                </div>
-                <div>Type: {event['type'].capitalize()}</div>
-            </div>
-            """, unsafe_allow_html=True)
+        settings_container = st
     
-    st.markdown('</div>', unsafe_allow_html=True)
+    settings_container.markdown("<h3 style='color: #e6f3ff;'>Dashboard Settings</h3>", unsafe_allow_html=True)
+    
+    # Enable/disable auto-refresh
+    auto_refresh = settings_container.checkbox("Auto-refresh (5s)", value=True, key="dashboard_auto_refresh")
+    
+    # Manual refresh button
+    if settings_container.button("🔄 Refresh Now", use_container_width=True, key="dashboard_manual_refresh"):
+        refresh_dashboard_data()
+        st.experimental_rerun()
+    
+    # Customize layout
+    settings_container.markdown("<h4 style='color: #e6f3ff; margin-top: 20px;'>Customize Layout</h4>", unsafe_allow_html=True)
+    
+    layout_changed = False
+    
+    for widget, current_value in st.session_state.dashboard_layout.items():
+        display_name = " ".join(word.capitalize() for word in widget.split("_"))
+        new_value = settings_container.checkbox(f"Show {display_name}", value=current_value, key=f"layout_{widget}")
+        
+        if new_value != current_value:
+            st.session_state.dashboard_layout[widget] = new_value
+            layout_changed = True
+    
+    # If layout changed, rerun to update
+    if layout_changed:
+        st.experimental_rerun()
+    
+    return auto_refresh
 
-# New function to run the dashboard within app.py (without set_page_config)
-def run_dashboard_in_app():
-    """Run the Meow Dashboard as an embedded component (no page config)"""
-    # Apply terminal CSS
-    st.markdown(terminal_css, unsafe_allow_html=True)
-    
-    # Initialize session state variables
+def display_quick_dashboard():
+    """Display the modular, live-updating dashboard"""
+    # Initialize dashboard session state variables
     if 'watchlist' not in st.session_state:
         st.session_state.watchlist = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
     
-    if 'last_refresh' not in st.session_state:
-        st.session_state.last_refresh = datetime.now()
-    
-    if 'layout' not in st.session_state:
-        st.session_state.layout = {
+    if 'dashboard_layout' not in st.session_state:
+        st.session_state.dashboard_layout = {
             'watchlist': True,
             'market_overview': True,
             'stock_charts': True,
             'news': True,
-            'signals': True,
-            'portfolio': True,
-            'calendar': True
+            'signals': True
         }
     
-    if 'stock_data' not in st.session_state:
-        st.session_state.stock_data = {}
+    if 'last_refresh' not in st.session_state:
+        st.session_state.last_refresh = datetime.now()
     
-    if 'market_indices' not in st.session_state:
-        st.session_state.market_indices = {}
+    if 'dashboard_stock_data' not in st.session_state:
+        st.session_state.dashboard_stock_data = {}
     
-    if 'news_data' not in st.session_state:
-        st.session_state.news_data = []
+    if 'dashboard_market_indices' not in st.session_state:
+        st.session_state.dashboard_market_indices = {}
     
-    if 'signals_data' not in st.session_state:
-        st.session_state.signals_data = {}
+    if 'dashboard_news_data' not in st.session_state:
+        st.session_state.dashboard_news_data = []
     
-    if 'calendar_data' not in st.session_state:
-        st.session_state.calendar_data = []
+    if 'dashboard_signals_data' not in st.session_state:
+        st.session_state.dashboard_signals_data = {}
+    
+    # Initial data fetch if empty
+    if not st.session_state.dashboard_stock_data:
+        refresh_dashboard_data()
     
     # Title with terminal styling
-    st.markdown("<h1 style='text-align: center; color: #e6f3ff;'>🐱 Meow Dashboard 🐱</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #e6f3ff;'>🐱 Meow Quick Dashboard 🐱</h1>", unsafe_allow_html=True)
     
-    # Split dashboard into sidebar and main content
-    col_settings, col_content = st.columns([1, 3])
+    # Display dashboard settings in sidebar
+    auto_refresh = display_dashboard_settings()
     
-    with col_settings:
-        # Dashboard settings
-        st.markdown("<h3 style='color: #e6f3ff;'>Dashboard Settings</h3>", unsafe_allow_html=True)
+    # Auto-refresh logic
+    if auto_refresh:
+        # Check if 5 seconds have passed since last refresh
+        time_diff = (datetime.now() - st.session_state.last_refresh).total_seconds()
+        if time_diff >= 5:
+            refresh_dashboard_data()
+            st.experimental_rerun()
         
-        # Enable/disable auto-refresh
-        auto_refresh = st.checkbox("Auto-refresh (5s)", value=True)
-        
-        # Manual refresh button
-        if st.button("🔄 Refresh Now", use_container_width=True):
-            refresh_all_data()
-            st.rerun()
-        
-        # Customize layout
-        st.markdown("<h3 style='color: #e6f3ff; margin-top: 20px;'>Layout Settings</h3>", unsafe_allow_html=True)
-        
-        layout_changed = False
-        
-        for widget, current_value in st.session_state.layout.items():
-            display_name = " ".join(word.capitalize() for word in widget.split("_"))
-            new_value = st.checkbox(f"Show {display_name}", value=current_value, key=f"layout_{widget}")
-            
-            if new_value != current_value:
-                st.session_state.layout[widget] = new_value
-                layout_changed = True
-        
-        # Watchlist management
-        if st.session_state.layout['watchlist']:
-            display_watchlist_manager()
+        # Display refresh indicator
+        st.markdown(f"""
+        <div class="refresh-indicator">
+            Auto-refresh: {5 - int(time_diff)}s | Last: {st.session_state.last_refresh.strftime('%H:%M:%S')} | Count: {st.session_state.refresh_counter}
+        </div>
+        """, unsafe_allow_html=True)
     
-    with col_content:
-        # Initial data fetch if empty
-        if not st.session_state.stock_data:
-            refresh_all_data()
-        
-        # Auto-refresh logic
-        if auto_refresh:
-            # Check if 5 seconds have passed since last refresh
-            time_diff = (datetime.now() - st.session_state.last_refresh).total_seconds()
-            if time_diff >= 5:
-                refresh_all_data()
-                st.rerun()
-            
-            # Display refresh indicator
-            st.markdown(f"""
-            <div class="refresh-indicator">
-                Auto-refresh: {5 - int(time_diff)}s | Last: {st.session_state.last_refresh.strftime('%H:%M:%S')} | Count: {st.session_state.refresh_counter}
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Market overview at the top
-        if st.session_state.layout['market_overview']:
-            display_market_overview_widget()
-        
-        # Main dashboard layout
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Stock prices
-            if st.session_state.layout['watchlist']:
-                display_stock_price_widget()
-            
-            # News feed
-            if st.session_state.layout['news']:
-                display_news_widget()
-            
-            # Calendar
-            if st.session_state.layout['calendar']:
-                display_calendar_widget()
-            
-        with col2:
-            # Portfolio
-            if st.session_state.layout['portfolio']:
-                display_portfolio_widget()
-            
-            # Stock charts
-            if st.session_state.layout['stock_charts']:
-                display_stock_charts_widget()
-            
-            # Technical signals
-            if st.session_state.layout['signals']:
-                display_signals_widget()
-        
-    # Footer
-    st.markdown("""
-    <div style="margin-top: 20px; text-align: center; color: #e6f3ff; font-size: 12px;">
-        <p>© 2025 Meow Terminal | Dashboard Module</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # Main dashboard layout - using custom column system for more flexibility
+    st.markdown('<div class="row">', unsafe_allow_html=True)
+    
+    # Left column (25%)
+    st.markdown('<div class="custom-column col-25">', unsafe_allow_html=True)
+    
+    # Watchlist manager
+    if st.session_state.dashboard_layout['watchlist']:
+        display_watchlist_widget()
+    
+    # Stock prices
+    if st.session_state.dashboard_layout['watchlist']:
+        display_stock_price_widget()
+    
+    # Market overview
+    if st.session_state.dashboard_layout['market_overview']:
+        display_market_overview_widget()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Middle column (50%)
+    st.markdown('<div class="custom-column col-50">', unsafe_allow_html=True)
+    
+    # Stock charts
+    if st.session_state.dashboard_layout['stock_charts']:
+        display_stock_charts_widget()
+    
+    # News feed
+    if st.session_state.dashboard_layout['news']:
+        display_news_widget()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Right column (25%)
+    st.markdown('<div class="custom-column col-25">', unsafe_allow_html=True)
+    
+    # Technical signals
+    if st.session_state.dashboard_layout['signals']:
+        display_signals_widget()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # End row
+    st.markdown('</div>', unsafe_allow_html=True)
 
 def main():
-    """Main function to run the dashboard standalone"""
-    # Set page config - only when run directly
-    st.set_page_config(
-        page_title="Meow Dashboard",
-        page_icon="😺",
-        layout="wide",
+    """Main function to run the application"""
+    # Apply terminal CSS
+    st.markdown(terminal_css, unsafe_allow_html=True)
+    
+    # Initialize session state to track if dashboard should be shown
+    if 'show_dashboard' not in st.session_state:
+        st.session_state.show_dashboard = False
+    
+    # Check if we should show homepage or dashboard
+    if not st.session_state.show_dashboard:
+        display_homepage()
+        return
+    
+    # Get API keys
+    alpha_vantage_key, fred_api_key = get_api_keys()
+    
+    # Sidebar for navigation
+    st.sidebar.markdown("<h1 style='color: #e6f3ff;'>Navigation</h1>", unsafe_allow_html=True)
+    
+    # All navigation options in a single dropdown - Added new Quick Dashboard option
+    selected_section = st.sidebar.selectbox(
+        "Go to",
+        ["Stock Dashboard", "Quick Dashboard", "News Dashboard", "Day Trader", "Backtesting", "Stock Analysis", "Technical Indicators", "Fundamental Analysis"]
     )
     
-    # Call the shared dashboard function
-    run_dashboard_in_app()
+    # Return to homepage button
+    if st.sidebar.button("Return to Homepage"):
+        st.session_state.show_dashboard = False
+        st.rerun()
+    
+    # Sidebar for inputs (common across sections)
+    st.sidebar.markdown("<h2 style='color: #e6f3ff;'>Stock Selection</h2>", unsafe_allow_html=True)
+    
+    # Fake terminal prompt for stock ticker
+    st.sidebar.markdown("<span style='color: #e6f3ff;'>C:\\STOCKS\\> Enter ticker:</span>", unsafe_allow_html=True)
+    
+    # User inputs for stock ticker
+    ticker = st.sidebar.text_input("", value="AAPL", label_visibility="collapsed").upper()
+    # Store current ticker in session state for verification
+    st.session_state.current_ticker = ticker
+    
+    # Check if ticker has changed and clear analysis if needed
+    if 'last_analyzed_ticker' in st.session_state and st.session_state.last_analyzed_ticker != ticker:
+        clear_analysis_results()
+    
+    # Button to fetch data (except for Quick Dashboard which handles fetching internally)
+    if selected_section != "Quick Dashboard" and st.sidebar.button("Fetch Stock Data", use_container_width=True):
+        with st.spinner("Fetching data - Please wait..."):
+            # Clear previous analysis results when fetching new data
+            clear_analysis_results()
+            
+            # Initialize stock data for models
+            stock_data = StockData(ticker, alpha_vantage_key, fred_api_key)
+            stock_data.fetch_data()
+            
+            # Fetch additional data for analysis
+            additional_data = fetch_additional_stock_data(ticker)
+            
+            # Calculate technical indicators
+            if additional_data and 'history' in additional_data and not additional_data['history'].empty:
+                technical_indicators = calculate_technical_indicators(additional_data['history'])
+            else:
+                technical_indicators = None
+            
+            # Store in session state for later use
+            st.session_state.stock_data = stock_data
+            st.session_state.additional_data = additional_data
+            st.session_state.technical_indicators = technical_indicators
+            st.session_state.last_analyzed_ticker = ticker
+            
+            st.sidebar.success(f"Data for {ticker} fetched successfully!")
+            # Force refresh to reflect new data
+            st.rerun()
+    
+    # Terminal breadcrumb path at top (except for Quick Dashboard)
+    if selected_section != "Quick Dashboard":
+        current_path = f"C:\\> STOCKS\\{ticker}\\{selected_section.upper().replace(' ', '_')}"
+        st.markdown(f"<div style='color: #e6f3ff; font-family: monospace; margin-bottom: 10px;'>{current_path}</div>", unsafe_allow_html=True)
+    
+    # Display the appropriate content based on the selection
+    if selected_section == "Stock Dashboard":
+        # If we have analysis results for the current ticker, show them
+        if ('ensemble_result' in st.session_state and 
+            'analysis_ticker' in st.session_state and 
+            st.session_state.analysis_ticker == ticker):
+            display_prediction_results()
+        else:
+            # Otherwise show the basic dashboard
+            display_basic_dashboard(ticker)
+    
+    # Special handling for Quick Dashboard which doesn't need ticker selection
+    elif selected_section == "Quick Dashboard":
+        display_quick_dashboard()
+    
+    # News dashboard section
+    elif selected_section == "News Dashboard":
+        display_news_dashboard_section(ticker)
+            
+    elif selected_section == "Day Trader":
+        display_day_trader_section(ticker)
+        
+    elif selected_section == "Backtesting":
+        display_backtesting_section(ticker)
+            
+    elif selected_section == "Stock Analysis":
+        display_stock_analysis_section(ticker)
+        
+    elif selected_section == "Technical Indicators":
+        display_technical_indicators_section(ticker)
+        
+    elif selected_section == "Fundamental Analysis":
+        display_fundamental_analysis_section(ticker)
 
 # This is the entry point of the script
 if __name__ == "__main__":
