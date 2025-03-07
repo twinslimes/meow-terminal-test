@@ -485,6 +485,38 @@ def display_news_dashboard_section(ticker):
         This is a simplified analysis and should not be used as the sole basis for investment decisions.
         """)
 
+def display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high):
+    """Display investment summary section with key metrics and recommendations"""
+    # Determine investment recommendation based on probability
+    if final_prob > 75:
+        recommendation = "Strong Buy"
+        rec_color = "#4CAF50"  # Green
+    elif final_prob > 60:
+        recommendation = "Buy"
+        rec_color = "#8BC34A"  # Light Green
+    elif final_prob > 45:
+        recommendation = "Hold"
+        rec_color = "#FFC107"  # Amber
+    elif final_prob > 30:
+        recommendation = "Sell"
+        rec_color = "#FF9800"  # Orange
+    else:
+        recommendation = "Strong Sell"
+        rec_color = "#F44336"  # Red
+    
+    # Calculate projected annual return
+    annual_return = (mean_price / current_price) ** (1/T) - 1 if T > 0 else 0
+    annual_return_pct = annual_return * 100
+    
+    st.markdown(f"""
+    <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f;">
+    <h3 style="color: #e6f3ff;">Investment Summary</h3>
+    <p style="color: #ffffff;">Recommendation: <span style="color:{rec_color};font-weight:bold;">{recommendation}</span></p>
+    <p style="color: #ffffff;">Projected Annual Return: <span style="font-weight:bold;">{annual_return_pct:.2f}%</span></p>
+    <p style="color: #ffffff;">Expected Price Change: <span style="font-weight:bold;">{price_change_pct:.2f}%</span> over {T:.1f} years</p>
+    </div>
+    """, unsafe_allow_html=True)
+
 def display_prediction_results():
     """Display prediction results in main dashboard"""
     # Check if we have analysis results
@@ -756,3 +788,24 @@ def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_c
         </div>
         """.format(target_price, current_price, T, mean_price, price_change_pct, final_prob), 
         unsafe_allow_html=True)
+
+# Main application function
+def main():
+    # Display terminal CSS
+    st.markdown(terminal_css, unsafe_allow_html=True)
+    
+    # Check if this is the first time loading
+    if 'show_dashboard' not in st.session_state:
+        st.session_state.show_dashboard = False
+    
+    # Show homepage or dashboard based on state
+    if not st.session_state.show_dashboard:
+        display_homepage()
+    else:
+        # Main dashboard content here
+        st.title("Meow Terminal Dashboard")
+        st.markdown("Your dashboard content goes here")
+
+# Run the main function
+if __name__ == "__main__":
+    main()
