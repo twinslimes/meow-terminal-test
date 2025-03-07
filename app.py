@@ -4,9 +4,10 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import warnings
-import requests
-import re
-from datetime import datetime, timedelta
+import subprocess
+import threading
+import sys
+import os
 
 # Import local modules
 from data_utils import get_api_keys, fetch_additional_stock_data, calculate_technical_indicators
@@ -226,36 +227,6 @@ terminal_css = """
     /* Fix for checkbox color */
     .stCheckbox label p {
         color: #e6f3ff !important; /* Muted white-blue for checkboxes */
-    }
-
-    /* News items styling */
-    .news-item {
-        border: 1px solid #e6f3ff;
-        background-color: #2f2f2f;
-        padding: 10px;
-        margin-bottom: 10px;
-        border-radius: 4px;
-    }
-    
-    .news-ticker {
-        font-weight: bold;
-        color: #e6f3ff;
-    }
-    
-    .news-headline {
-        margin: 5px 0;
-    }
-    
-    .news-positive {
-        color: #4CAF50;
-    }
-    
-    .news-negative {
-        color: #F44336;
-    }
-    
-    .news-neutral {
-        color: #FFC107;
     }
 </style>
 """
@@ -805,120 +776,75 @@ def display_basic_dashboard(ticker):
             run_prediction_analysis(ticker, T, dt, M, target_price)
         st.markdown("</div>", unsafe_allow_html=True)
 
-def predict_news_sentiment(title):
-    """Simple sentiment analysis to predict outcome based on headline"""
-    positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
-                     'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
-    negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
-                     'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
+def launch_news_dashboard(ticker):
+    """Launch the news dashboard in a separate window"""
+    api_key = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"  # Using the API key from news_dashboard.py
     
-    title_lower = title.lower()
+    # Start a thread to run the news dashboard app
+    def run_news_dashboard():
+        try:
+            # Check if script exists
+            if not os.path.exists("news_dashboard.py"):
+                st.error("Could not find news_dashboard.py in the current directory.")
+                return
+                
+            # Get the Python executable path
+            python_executable = sys.executable
+            
+            # Launch the script with the ticker as an argument
+            process = subprocess.Popen([python_executable, "news_dashboard.py", ticker, api_key])
+            
+            # Store the process in session state so we can terminate it later if needed
+            st.session_state.news_dashboard_process = process
+            
+        except Exception as e:
+            st.error(f"Error launching news dashboard: {e}")
     
-    positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
-    negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
+    # Launch in a separate thread so it doesn't block the Streamlit UI
+    news_thread = threading.Thread(target=run_news_dashboard)
+    news_thread.daemon = True  # Make sure thread exits when main program exits
+    news_thread.start()
     
-    if positive_count > negative_count:
-        return "📈 Positive", "news-positive"
-    elif negative_count > positive_count:
-        return "📉 Negative", "news-negative"
-    else:
-        return "⟷ Neutral", "news-neutral"
+    return True
 
 def display_news_dashboard_section(ticker):
-    """Display news dashboard with stock-related news"""
-    st.header(f"Stock News Dashboard")
+    """Display instructions for the news dashboard and launch button"""
+    st.header("Stock News Dashboard")
     
-    # API key for Polygon.io - using the key from the news_dashboard.py
-    api_key = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
+    # Check if we've already launched the dashboard
+    dashboard_launched = st.session_state.get('news_dashboard_launched', False)
     
-    # Create a container for news items
-    news_container = st.container()
-    
-    # Button to refresh news
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        refresh = st.button("Refresh News", key="refresh_news", use_container_width=True)
-    
-    with col1:
-        # Option to filter news
-        news_filter = st.selectbox(
-            "Filter news by",
-            ["All News", f"Only {ticker} News", "Positive News", "Negative News"]
-        )
-    
-    # Initialize news in session state
-    if 'news_data' not in st.session_state or refresh:
-        st.session_state.news_data = fetch_stock_news(api_key, ticker)
-    
-    # Display news
-    with news_container:
-        if st.session_state.news_data:
-            for news_item in st.session_state.news_data:
-                # Apply filters
-                if news_filter == f"Only {ticker} News" and ticker not in news_item.get('tickers', []):
-                    continue
-                elif news_filter == "Positive News" and predict_news_sentiment(news_item.get('title', ''))[0] != "📈 Positive":
-                    continue
-                elif news_filter == "Negative News" and predict_news_sentiment(news_item.get('title', ''))[0] != "📉 Negative":
-                    continue
-                
-                # Get sentiment
-                sentiment_text, sentiment_class = predict_news_sentiment(news_item.get('title', ''))
-                
-                # Display news item
-                st.markdown(
-                    f"""
-                    <div class="news-item">
-                        <div class="news-ticker">Tickers: {', '.join(news_item.get('tickers', []))}</div>
-                        <h3 class="news-headline">{news_item.get('title', 'No headline available')}</h3>
-                        <div class="{sentiment_class}">{sentiment_text}</div>
-                        <small>{news_item.get('published_utc', '').replace('T', ' ').replace('Z', ' UTC')}</small>
-                        <p><a href="{news_item.get('article_url', '#')}" target="_blank">Read full article</a></p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-        else:
-            st.info("No news data available. Please refresh or try again later.")
-            
-            # Placeholder for news dashboard
-            st.markdown("""
-            <div style="text-align: center; margin: 20px; padding: 40px; border: 1px dashed #e6f3ff; border-radius: 10px;">
-                <h3 style="color: #e6f3ff;">Stock News Dashboard</h3>
-                <p style="color: #e6f3ff;">
-                    Real-time financial news with sentiment analysis<br>
-                    Track market-moving headlines for your selected stocks<br>
-                    Filter news by company or sentiment (positive/negative)
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-
-def fetch_stock_news(api_key, ticker=None):
-    """Fetch stock news from Polygon.io API"""
-    # Get yesterday's date
-    yesterday = datetime.now() - timedelta(days=7)  # Look back a week for more results
-    date_from = yesterday.strftime("%Y-%m-%d")
-    
-    # Polygon API endpoint for market news
-    url = f"https://api.polygon.io/v2/reference/news?limit=20&order=desc&sort=published_utc&apiKey={api_key}"
-    if ticker:
-        url += f"&ticker={ticker}"
-    
-    try:
-        response = requests.get(url)
-        data = response.json()
+    if dashboard_launched:
+        st.info(f"News dashboard is running in a separate window for {ticker}.")
         
-        if response.status_code == 200 and 'results' in data:
-            # Filter for major news (those with tickers mentioned)
-            major_news = [item for item in data['results'] if item.get('tickers') and len(item.get('tickers', [])) > 0]
-            return major_news
-        else:
-            st.error(f"Error fetching news: {data.get('error', 'Unknown error')}")
-            return []
-    
-    except Exception as e:
-        st.error(f"Error fetching news: {str(e)}")
-        return []
+        # Provide button to launch a new instance
+        if st.button("Launch New News Dashboard Window", key="relaunch_news"):
+            launch_news_dashboard(ticker)
+            st.success(f"Launched a new news dashboard window for {ticker}.")
+    else:
+        st.markdown("""
+        <div style="border: 1px solid #e6f3ff; padding: 20px; background-color: #2f2f2f; margin-bottom: 20px;">
+            <h3 style="color: #e6f3ff;">Stock News Dashboard</h3>
+            <p style="color: #ffffff;">
+                The Stock News Dashboard opens in a separate window and provides:
+                <ul>
+                    <li>A weekly market schedule showing earnings and economic data releases</li>
+                    <li>Real-time financial news with sentiment analysis</li>
+                    <li>News filtered specifically for your selected stock</li>
+                </ul>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Button to launch the dashboard
+        if st.button("Launch News Dashboard", key="launch_news", use_container_width=True):
+            success = launch_news_dashboard(ticker)
+            if success:
+                st.session_state.news_dashboard_launched = True
+                st.success(f"Launched news dashboard for {ticker} in a separate window.")
+                st.info("If the window doesn't appear, check your taskbar or alt-tab to find it.")
+            else:
+                st.error("Failed to launch news dashboard. Check logs for details.")
 
 def main():
     """Main function to run the application"""
@@ -950,7 +876,7 @@ def main():
     try:
         st.sidebar.markdown("<h1 style='color: #e6f3ff;'>Navigation</h1>", unsafe_allow_html=True)
         
-        # All navigation options in a single dropdown - ADDED "News" TO THE MENU
+        # All navigation options in a single dropdown
         selected_section = st.sidebar.selectbox(
             "Go to",
             ["Stock Dashboard", "Day Trader", "Backtesting", "Stock Analysis", "Technical Indicators", "Fundamental Analysis", "News"]
@@ -1041,7 +967,7 @@ def main():
             elif selected_section == "Fundamental Analysis":
                 display_fundamental_analysis_section(ticker)
                 
-            # Add the new News section
+            # Use the external news dashboard module
             elif selected_section == "News":
                 display_news_dashboard_section(ticker)
                 
