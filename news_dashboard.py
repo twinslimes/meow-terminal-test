@@ -1,40 +1,44 @@
-import streamlit as st
-import requests
-import re
-from datetime import datetime, timedelta
-
-# Constants
-API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
-
-def predict_outcome(title):
-    """Simple sentiment analysis to predict outcome based on headline"""
-    positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
-                     'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
-    negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
-                     'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
+def display_news_dashboard_section(ticker):
+    """Display news dashboard directly integrated into the app."""
+    st.header("Stock News Dashboard")
     
-    title_lower = title.lower()
+    # Import necessary modules for news dashboard
+    import re
+    from datetime import datetime, timedelta
     
-    positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
-    negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
+    # Custom CSS for better styling - matched to terminal theme
+    st.markdown("""
+    <style>
+    .news-item {
+        border: 1px solid #4a90e2;
+        border-radius: 5px;
+        padding: 15px;
+        margin: 10px 0;
+        background-color: #2f2f2f;
+    }
+    .news-sentiment {
+        border: 1px solid;
+        border-radius: 5px;
+        padding: 10px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 16px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
-    if positive_count > negative_count:
-        return "📈 Positive", "green"
-    elif negative_count > positive_count:
-        return "📉 Negative", "red"
-    else:
-        return "⟷ Neutral", "orange"
-
-def get_market_events():
-    """Generate market events for the current week"""
+    # Market Calendar Section
+    st.subheader("Market Schedule")
+    
     # Get the current week's Monday date
     today = datetime.now().date()
     monday = today - timedelta(days=today.weekday())
     
+    # Define market events
     events = [
         # Monday events
         {"day": 0, "text": "AAPL Earnings (After Close)", "color": "green"},
-        {"day": 0, "text": "Market Open 9:30 AM", "color": "black"},
+        {"day": 0, "text": "Market Open 9:30 AM", "color": "#e6f3ff"},
         
         # Tuesday events
         {"day": 1, "text": "CPI Data 8:30 AM", "color": "orange"},
@@ -56,88 +60,16 @@ def get_market_events():
     
     # Prepare weekday labels with dates
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    formatted_events = []
+    market_events = []
     
     for i, day in enumerate(weekdays):
         current_date = monday + timedelta(days=i)
         day_events = [event for event in events if event['day'] == i]
-        formatted_events.append({
+        market_events.append({
             "day": day,
             "date": current_date.strftime('%m/%d'),
             "events": day_events
         })
-    
-    return formatted_events
-
-def fetch_stock_news():
-    """Fetch stock news from Polygon API"""
-    # Get yesterday's date
-    yesterday = datetime.now() - timedelta(days=1)
-    date_from = yesterday.strftime("%Y-%m-%d")
-    
-    # Polygon API endpoint for market news
-    url = f"https://api.polygon.io/v2/reference/news?limit=10&order=desc&sort=published_utc&apiKey={API_KEY}"
-    
-    try:
-        response = requests.get(url)
-        data = response.json()
-        
-        if response.status_code == 200 and 'results' in data:
-            # Filter for major news (those with tickers mentioned)
-            major_news = [item for item in data['results'] if item.get('tickers') and len(item.get('tickers', [])) > 0]
-            
-            # Enrich news with sentiment prediction
-            for news in major_news:
-                outcome_text, outcome_color = predict_outcome(news.get('title', ''))
-                news['outcome_text'] = outcome_text
-                news['outcome_color'] = outcome_color
-                news['tickers_str'] = ", ".join(news.get('tickers', []))
-            
-            return major_news
-        else:
-            st.error(f"Error fetching news: {data.get('error', 'Unknown error')}")
-            return []
-    
-    except Exception as e:
-        st.error(f"Error fetching news: {e}")
-        return []
-
-def news_dashboard():
-    """Streamlit News Dashboard Page"""
-    st.title("Stock News Dashboard")
-    
-    # Custom CSS for better styling
-    st.markdown("""
-    <style>
-    .market-calendar {
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 20px;
-    }
-    .day-column {
-        flex: 1;
-        border: 1px solid #e0e0e0;
-        padding: 10px;
-        margin: 0 5px;
-        border-radius: 5px;
-    }
-    .day-header {
-        font-weight: bold;
-        text-align: center;
-        margin-bottom: 10px;
-    }
-    .event {
-        margin: 5px 0;
-        font-size: 0.9em;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Market Calendar Section
-    st.subheader("Market Schedule")
-    
-    # Get market events
-    market_events = get_market_events()
     
     # Create columns for market calendar
     calendar_cols = st.columns(5)
@@ -145,30 +77,138 @@ def news_dashboard():
     # Display market events
     for i, day in enumerate(market_events):
         with calendar_cols[i]:
-            st.markdown(f"**{day['day']} ({day['date']})**")
+            st.markdown(f"<div style='font-weight: bold; text-align: center; color: #e6f3ff;'>{day['day']} ({day['date']})</div>", unsafe_allow_html=True)
             for event in day['events']:
                 st.markdown(f"<div style='color:{event['color']};'>{event['text']}</div>", unsafe_allow_html=True)
     
     # News Section
-    st.subheader("Latest Stock News")
+    st.subheader(f"Latest News for {ticker}")
     
-    # Fetch and display news
-    news_items = fetch_stock_news()
+    # Simple sentiment analysis function
+    def predict_outcome(title):
+        """Simple sentiment analysis to predict outcome based on headline"""
+        positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
+                         'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
+        negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
+                         'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
+        
+        title_lower = title.lower()
+        
+        positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
+        negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
+        
+        if positive_count > negative_count:
+            return "📈 Positive", "green"
+        elif negative_count > positive_count:
+            return "📉 Negative", "red"
+        else:
+            return "⟷ Neutral", "orange"
     
-    # Display each news item
+    # Function to fetch news for the specific ticker
+    def fetch_ticker_news(ticker):
+        """Fetch news specifically for the selected ticker"""
+        API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
+        # Polygon API endpoint for ticker-specific news
+        url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&limit=10&order=desc&sort=published_utc&apiKey={API_KEY}"
+        
+        try:
+            response = requests.get(url)
+            data = response.json()
+            
+            if response.status_code == 200 and 'results' in data:
+                # Process news items
+                for news in data['results']:
+                    outcome_text, outcome_color = predict_outcome(news.get('title', ''))
+                    news['outcome_text'] = outcome_text
+                    news['outcome_color'] = outcome_color
+                    news['tickers_str'] = ", ".join(news.get('tickers', [ticker]))
+                
+                return data['results']
+            else:
+                st.warning(f"Error fetching news for {ticker}: {data.get('error', 'Unknown error')}")
+                return []
+        
+        except Exception as e:
+            st.error(f"Error fetching news: {e}")
+            return []
+    
+    # Function to fetch general market news
+    def fetch_market_news():
+        """Fetch general market news"""
+        API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
+        # Polygon API endpoint for market news
+        url = f"https://api.polygon.io/v2/reference/news?limit=10&order=desc&sort=published_utc&apiKey={API_KEY}"
+        
+        try:
+            response = requests.get(url)
+            data = response.json()
+            
+            if response.status_code == 200 and 'results' in data:
+                # Filter for major news (those with tickers mentioned)
+                major_news = [item for item in data['results'] if item.get('tickers') and len(item.get('tickers', [])) > 0]
+                
+                # Process news items
+                for news in major_news:
+                    outcome_text, outcome_color = predict_outcome(news.get('title', ''))
+                    news['outcome_text'] = outcome_text
+                    news['outcome_color'] = outcome_color
+                    news['tickers_str'] = ", ".join(news.get('tickers', []))
+                
+                return major_news
+            else:
+                st.warning(f"Error fetching market news: {data.get('error', 'Unknown error')}")
+                return []
+        
+        except Exception as e:
+            st.error(f"Error fetching news: {e}")
+            return []
+    
+    # Fetch news - first try ticker-specific, then fallback to general
+    with st.spinner(f"Fetching news for {ticker}..."):
+        news_items = fetch_ticker_news(ticker)
+        
+        if not news_items:
+            st.info(f"No specific news found for {ticker}. Displaying general market news.")
+            news_items = fetch_market_news()
+        
+        if not news_items:
+            st.error("Could not fetch any news. Please try again later.")
+    
+    # Display news items
     for news in news_items:
-        st.markdown(f"**Tickers:** {news['tickers_str']}")
+        col1, col2 = st.columns([4, 1])
         
-        # Clickable headline
-        st.markdown(f"[{news['title']}]({news['article_url']})")
+        with col1:
+            # Clickable headline
+            st.markdown(f"#### [{news['title']}]({news.get('article_url', '#')})")
+            
+            # Source and publication date
+            published_date = datetime.strptime(news.get('published_utc', '')[:19], "%Y-%m-%dT%H:%M:%S") if 'published_utc' in news else None
+            date_str = published_date.strftime("%Y-%m-%d %H:%M") if published_date else "N/A"
+            
+            st.markdown(f"**Source:** {news.get('publisher', {}).get('name', 'Unknown')} | **Published:** {date_str}")
+            
+            # Tickers mentioned
+            st.markdown(f"**Tickers:** {news.get('tickers_str', '')}")
         
-        # Sentiment outcome
-        st.markdown(f"**Sentiment:** <span style='color:{news['outcome_color']};'>{news['outcome_text']}</span>", 
-                    unsafe_allow_html=True)
+        with col2:
+            # Sentiment analysis
+            outcome_text = news.get('outcome_text', '⟷ Neutral')
+            outcome_color = news.get('outcome_color', 'orange')
+            
+            st.markdown(f"""
+            <div class="news-sentiment" style="border-color: {outcome_color};">
+                <span style="color: {outcome_color};">{outcome_text}</span>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Description snippet if available
+        if 'description' in news and news['description']:
+            st.markdown(f"_{news['description']}_")
         
         # Separator
         st.markdown("---")
-
-# If this script is run directly (not imported)
-if __name__ == "__main__":
-    news_dashboard()
+    
+    # Add a refresh button
+    if st.button("Refresh News", key="refresh_news", use_container_width=True):
+        st.experimental_rerun()
