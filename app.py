@@ -709,7 +709,9 @@ def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_c
     
     with col_rank2:
         # Display investment summary
-        display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high) gauge chart for sentiment
+        display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high)
+        
+        # Gauge chart for sentiment
         gauge = go.Figure(go.Indicator(
             mode = "gauge+number",
             value = final_prob,
@@ -754,6 +756,3 @@ def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_c
         </div>
         """.format(target_price, current_price, T, mean_price, price_change_pct, final_prob), 
         unsafe_allow_html=True)
-    
-    with col_sent2:
-        # Create a
