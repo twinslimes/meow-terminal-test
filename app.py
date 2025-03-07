@@ -12,12 +12,27 @@ import requests
 import re
 from datetime import datetime, timedelta
 import pytz
+import importlib
 
-# Import local modules
+# Import local modules with forced reloading to prevent caching issues
+import data_utils
+import visualization
+import analysis
+import day_trader
+import backtesting
+import models
+
+# Ensure we get fresh versions of modules
+importlib.reload(data_utils)
+importlib.reload(visualization)
+importlib.reload(analysis)
+importlib.reload(backtesting)
+importlib.reload(models)
+
+# Import functions after module reloading
 from data_utils import get_api_keys, fetch_additional_stock_data, calculate_technical_indicators
 from visualization import create_price_distribution_plot, create_model_comparison_plot, create_confidence_interval_plot
 from analysis import display_stock_analysis_section, display_technical_indicators_section, display_fundamental_analysis_section
-from day_trader import display_day_trader_section
 from backtesting import display_backtesting_section
 
 # Import all model classes from models.py
@@ -1092,7 +1107,10 @@ def main():
                     display_basic_dashboard(ticker)
                     
             elif selected_section == "Day Trader":
-                display_day_trader_section(ticker)
+                # Force reload the day_trader module to get the latest version
+                importlib.reload(day_trader)
+                # Then call the function from the freshly loaded module
+                day_trader.display_day_trader_section(ticker)
                 
             elif selected_section == "Backtesting":
                 display_backtesting_section(ticker)
