@@ -1,12 +1,9 @@
+import streamlit as st
 import requests
 import re
 from datetime import datetime, timedelta
-from flask import Flask, render_template, jsonify
-import os
 
-app = Flask(__name__)
-
-# API key (consider using environment variable in production)
+# Constants
 API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
 
 def predict_outcome(title):
@@ -26,7 +23,7 @@ def predict_outcome(title):
     elif negative_count > positive_count:
         return "📉 Negative", "red"
     else:
-        return "⟷ Neutral", "amber"
+        return "⟷ Neutral", "orange"
 
 def get_market_events():
     """Generate market events for the current week"""
@@ -98,164 +95,80 @@ def fetch_stock_news():
             
             return major_news
         else:
+            st.error(f"Error fetching news: {data.get('error', 'Unknown error')}")
             return []
     
     except Exception as e:
-        print(f"Error fetching news: {e}")
+        st.error(f"Error fetching news: {e}")
         return []
 
-@app.route('/')
-def index():
-    """Render the main dashboard page"""
-    market_events = get_market_events()
-    return render_template('index.html', 
-                           market_events=market_events)
-
-@app.route('/news')
-def news():
-    """Fetch and return stock news as JSON"""
-    news_items = fetch_stock_news()
-    return jsonify(news_items)
-
-if __name__ == '__main__':
-    # Ensure templates directory exists
-    os.makedirs('templates', exist_ok=True)
+def news_dashboard():
+    """Streamlit News Dashboard Page"""
+    st.title("Stock News Dashboard")
     
-    # Create HTML template
-    with open('templates/index.html', 'w') as f:
-        f.write('''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Stock News Dashboard</title>
+    # Custom CSS for better styling
+    st.markdown("""
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f0f0f0;
-        }
-        h1 {
-            text-align: center;
-            color: #333;
-        }
-        #market-calendar {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 20px;
-        }
-        .day-column {
-            flex: 1;
-            border: 1px solid #ddd;
-            padding: 10px;
-            margin: 0 5px;
-            background-color: white;
-        }
-        .day-header {
-            font-weight: bold;
-            margin-bottom: 10px;
-            text-align: center;
-        }
-        .event {
-            margin: 5px 0;
-            font-size: 0.9em;
-        }
-        #news-section {
-            background-color: white;
-            padding: 20px;
-            border-radius: 5px;
-        }
-        .news-item {
-            border-bottom: 1px solid #eee;
-            padding: 10px 0;
-        }
-        .news-item:last-child {
-            border-bottom: none;
-        }
-        .news-headline {
-            cursor: pointer;
-            color: #1a73e8;
-        }
-        .news-headline:hover {
-            text-decoration: underline;
-        }
-        #refresh-btn {
-            display: block;
-            margin: 20px auto;
-            padding: 10px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
+    .market-calendar {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 20px;
+    }
+    .day-column {
+        flex: 1;
+        border: 1px solid #e0e0e0;
+        padding: 10px;
+        margin: 0 5px;
+        border-radius: 5px;
+    }
+    .day-header {
+        font-weight: bold;
+        text-align: center;
+        margin-bottom: 10px;
+    }
+    .event {
+        margin: 5px 0;
+        font-size: 0.9em;
+    }
     </style>
-</head>
-<body>
-    <h1>Stock News Dashboard</h1>
+    """, unsafe_allow_html=True)
     
-    <div id="market-calendar">
-        {% for day in market_events %}
-        <div class="day-column">
-            <div class="day-header">{{ day.day }} ({{ day.date }})</div>
-            {% for event in day.events %}
-            <div class="event" style="color: {{ event.color }};">{{ event.text }}</div>
-            {% endfor %}
-        </div>
-        {% endfor %}
-    </div>
+    # Market Calendar Section
+    st.subheader("Market Schedule")
     
-    <button id="refresh-btn">Refresh News</button>
+    # Get market events
+    market_events = get_market_events()
     
-    <div id="news-section">
-        <h2>Latest Stock News</h2>
-        <div id="news-container"></div>
-    </div>
+    # Create columns for market calendar
+    calendar_cols = st.columns(5)
+    
+    # Display market events
+    for i, day in enumerate(market_events):
+        with calendar_cols[i]:
+            st.markdown(f"**{day['day']} ({day['date']})**")
+            for event in day['events']:
+                st.markdown(f"<div style='color:{event['color']};'>{event['text']}</div>", unsafe_allow_html=True)
+    
+    # News Section
+    st.subheader("Latest Stock News")
+    
+    # Fetch and display news
+    news_items = fetch_stock_news()
+    
+    # Display each news item
+    for news in news_items:
+        st.markdown(f"**Tickers:** {news['tickers_str']}")
+        
+        # Clickable headline
+        st.markdown(f"[{news['title']}]({news['article_url']})")
+        
+        # Sentiment outcome
+        st.markdown(f"**Sentiment:** <span style='color:{news['outcome_color']};'>{news['outcome_text']}</span>", 
+                    unsafe_allow_html=True)
+        
+        # Separator
+        st.markdown("---")
 
-    <script>
-        function fetchNews() {
-            fetch('/news')
-                .then(response => response.json())
-                .then(news => {
-                    const container = document.getElementById('news-container');
-                    container.innerHTML = ''; // Clear previous news
-                    
-                    if (news.length === 0) {
-                        container.innerHTML = '<p>No news available</p>';
-                        return;
-                    }
-                    
-                    news.forEach(item => {
-                        const newsItem = document.createElement('div');
-                        newsItem.className = 'news-item';
-                        
-                        newsItem.innerHTML = `
-                            <div>Tickers: ${item.tickers_str}</div>
-                            <div class="news-headline" onclick="window.open('${item.article_url}', '_blank')">
-                                ${item.title}
-                            </div>
-                            <div style="color: ${item.outcome_color};">${item.outcome_text}</div>
-                        `;
-                        
-                        container.appendChild(newsItem);
-                    });
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                });
-        }
-
-        // Fetch news on page load
-        fetchNews();
-
-        // Add event listener to refresh button
-        document.getElementById('refresh-btn').addEventListener('click', fetchNews);
-    </script>
-</body>
-</html>
-        ''')
-    
-    # Run the Flask app
-    app.run(debug=True)
+# If this script is run directly (not imported)
+if __name__ == "__main__":
+    news_dashboard()
