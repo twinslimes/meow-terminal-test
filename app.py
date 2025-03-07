@@ -11,6 +11,7 @@ import os
 import requests
 import re
 from datetime import datetime, timedelta
+import pytz
 
 # Import local modules
 from data_utils import get_api_keys, fetch_additional_stock_data, calculate_technical_indicators
@@ -466,6 +467,512 @@ def display_news_dashboard_section(ticker):
     if st.button("Refresh News", key="refresh_news", use_container_width=True):
         st.experimental_rerun()
 
+def display_basic_dashboard(ticker):
+    """Display basic dashboard with current price and chart"""
+    if 'stock_data' in st.session_state and st.session_state.stock_data:
+        stock_data = st.session_state.stock_data
+        
+        # Verify we're displaying data for the correct ticker
+        if stock_data.ticker != ticker:
+            st.warning(f"Displaying data for {stock_data.ticker}, but the current selected ticker is {ticker}. Please fetch data for {ticker}.")
+            return
+        
+        # Display current price and basic metrics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(label="Current Price", value=f"${stock_data.price:.2f}")
+        
+        with col2:
+            st.metric(label="Annual Volatility", value=f"{stock_data.volatility:.2f}")
+        
+        with col3:
+            # Calculate implied cost of equity
+            implied_coe = stock_data.risk_free_rate + stock_data.volatility * 0.5
+            st.metric(label="Implied Cost of Equity", value=f"{implied_coe*100:.2f}%")
+        
+        # Show historical price chart
+        if stock_data.historical_data is not None:
+            hist_data = stock_data.historical_data
+            if 'Close' in hist_data.columns:
+                fig = px.line(hist_data['Close'], title=f"{ticker} Historical Price")
+                
+                # Update figure for terminal theme
+                fig.update_layout(
+                    paper_bgcolor='#2f2f2f',
+                    plot_bgcolor='#2f2f2f',
+                    font=dict(color='#ffffff'),
+                    title_font=dict(color='#e6f3ff'),
+                    xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+                    yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+                )
+                fig.update_traces(line_color='#e6f3ff')
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+        # Prediction model parameters
+        st.markdown(win95_header("Price Prediction"), unsafe_allow_html=True)
+        st.markdown("<p style='color: #ffffff;'>Use the controls below to set up and run a price prediction analysis.</p>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            T = st.slider("Time Horizon (years)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+            st.session_state.T = T  # Store in session state for later use
+        
+        with col2:
+            # Get current price from session
+            current_price = stock_data.price
+            
+            # Target price input
+            target_price = st.number_input(
+                "Target Price ($)", 
+                min_value=float(current_price * 0.5), 
+                max_value=float(current_price * 2.0), 
+                value=float(current_price * 1.2),
+                step=0.01
+            )
+        
+        # Calculate implied return
+        implied_return = (target_price / current_price - 1) * 100
+        annual_return = ((target_price / current_price) ** (1/T) - 1) * 100
+        
+        st.metric(
+            label="Implied Total Return", 
+            value=f"{implied_return:.2f}%",
+            delta=f"{annual_return:.2f}% annually"
+        )
+        
+        # Model selection
+        st.markdown(win95_header("Select Models to Include"), unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            global use_gbm, use_advanced_gbm, use_qmc
+            use_gbm = st.checkbox("Geometric Brownian Motion", value=True)
+            use_advanced_gbm = st.checkbox("Advanced GBM", value=True)
+            use_qmc = st.checkbox("Quasi Monte Carlo", value=True)
+        
+        with col2:
+            global use_jump, use_heston, use_garch
+            use_jump = st.checkbox("Jump Diffusion", value=True)
+            use_heston = st.checkbox("Heston Stochastic Volatility", value=True)
+            use_garch = st.checkbox("GARCH Volatility", value=HAS_ARCH)
+        
+        with col3:
+            global use_regime, use_vg, use_neural
+            use_regime = st.checkbox("Regime Switching", value=True)
+            use_vg = st.checkbox("Variance Gamma", value=True)
+            use_neural = st.checkbox("Neural SDE", value=True)
+        
+        # Advanced settings
+        with st.expander("Advanced Settings", expanded=False):
+            M = st.slider("Number of Simulations", min_value=1000, max_value=10000, value=5000, step=1000)
+            dt = st.select_slider(
+                "Time Step", 
+                options=[1/252, 1/52, 1/26, 1/12], 
+                value=1/12, 
+                format_func=lambda x: f"{int(1/x)} times per year"
+            )
+        
+        # Button to run simulations
+        st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+        if st.button("Run Probability Analysis", key="run_analysis", use_container_width=True):
+            run_prediction_analysis(ticker, T, dt, M, target_price)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+def run_prediction_analysis(ticker, T, dt, M, target_price):
+    """Run stock price prediction analysis with selected models"""
+    if 'stock_data' not in st.session_state or st.session_state.stock_data is None:
+        st.warning("Please fetch stock data first.")
+        return
+    
+    stock_data = st.session_state.stock_data
+    
+    # Verify we're working with the correct ticker
+    if stock_data.ticker != ticker:
+        st.warning(f"Stock data is for {stock_data.ticker}, not {ticker}. Please fetch data for {ticker} first.")
+        return
+    
+    with st.spinner("Running simulations - this may take a minute..."):
+        # Create ensemble
+        ensemble = StockModelEnsemble(stock_data)
+        
+        # Add selected models to ensemble
+        if use_gbm:
+            ensemble.add_model(GeometricBrownianMotion(stock_data))
+        if use_advanced_gbm:
+            ensemble.add_model(AdvancedGBM(stock_data))
+        if use_qmc:
+            ensemble.add_model(QuasiMonteCarloModel(stock_data))
+        if use_jump:
+            ensemble.add_model(JumpDiffusionModel(stock_data))
+        if use_heston:
+            ensemble.add_model(HestonModel(stock_data))
+        if use_garch and HAS_ARCH:
+            ensemble.add_model(GARCHModel(stock_data))
+        if use_regime:
+            ensemble.add_model(RegimeSwitchingModel(stock_data))
+        if use_vg:
+            ensemble.add_model(VarianceGammaModel(stock_data))
+        if use_neural:
+            ensemble.add_model(NeuralSDEModel(stock_data))
+        
+        # Calibrate all models
+        ensemble.calibrate_all()
+        
+        # Run all simulations
+        ensemble.run_all_simulations(T, dt, M, target_price)
+        
+        # Compute ensemble forecast
+        ensemble_result = ensemble.compute_ensemble_forecast()
+        
+        # Store in session state
+        st.session_state.ensemble = ensemble
+        st.session_state.ensemble_result = ensemble_result
+        st.session_state.target_price = target_price
+        st.session_state.T = T
+        # Save current ticker to track if ticker changes
+        st.session_state.analysis_ticker = ticker
+    
+    st.success("Analysis completed!")
+    display_prediction_results()
+
+def display_prediction_results():
+    """Display prediction results in main dashboard"""
+    # Check if we have analysis results
+    if 'ensemble' not in st.session_state or 'ensemble_result' not in st.session_state:
+        st.info("No analysis results available. Please run a prediction analysis.")
+        return
+        
+    ensemble = st.session_state.ensemble
+    ensemble_result = st.session_state.ensemble_result
+    target_price = st.session_state.target_price
+    T = st.session_state.get('T', 1.0)  # Get time horizon with default of 1.0
+    
+    # Verify we're displaying the correct ticker
+    current_ticker = st.session_state.get('current_ticker', '')
+    analysis_ticker = st.session_state.get('analysis_ticker', '')
+    
+    if current_ticker != analysis_ticker:
+        st.warning(f"The displayed analysis is for {analysis_ticker}, but the current selected ticker is {current_ticker}. Please run a new analysis.")
+        if st.button("Clear Analysis Results"):
+            clear_analysis_results()
+            st.rerun()
+        return
+    
+    st.markdown(win95_header("Probability Analysis Results"), unsafe_allow_html=True)
+    
+    col_prob1, col_prob2, col_prob3 = st.columns(3)
+    with col_prob1:
+        st.metric(
+            label="Average Price Probability", 
+            value=f"{ensemble_result['avg_probability']:.2f}%",
+            help="Probability that the average price over the time period will be at or above target"
+        )
+    with col_prob2:
+        st.metric(
+            label="Final Price Probability", 
+            value=f"{ensemble_result['final_probability']:.2f}%",
+            help="Probability that the price at the end of the time period will be at or above target"
+        )
+    with col_prob3:
+        st.metric(
+            label="Maximum Price Probability", 
+            value=f"{ensemble_result['max_probability']:.2f}%",
+            help="Probability that the maximum price during the time period will be at or above target"
+        )
+    
+    # Expected price and confidence interval
+    st.markdown(win95_header("Price Projections"), unsafe_allow_html=True)
+    ci_low, ci_high = ensemble_result['confidence_interval']
+    st.metric(
+        label="Expected Final Price", 
+        value=f"${ensemble_result['mean_price']:.2f}",
+        delta=f"95% CI: ${ci_low:.2f} to ${ci_high:.2f}"
+    )
+    
+    # User-friendly dashboard first, then detailed tabs
+    tab0, tab1, tab2, tab3 = st.tabs(["Dashboard", "Price Distribution", "Model Comparison", "Confidence Intervals"])
+    
+    with tab0:
+        # Create the user-friendly dashboard
+        st.markdown(win95_header(f"Investment Outlook for {ensemble.stock_data.ticker}"), unsafe_allow_html=True)
+        
+        # Determine sentiment
+        final_prob = ensemble_result['final_probability']
+        mean_price = ensemble_result['mean_price']
+        current_price = ensemble.stock_data.price
+        price_change_pct = (mean_price / current_price - 1) * 100
+        
+        # Create sentiment gauge and other dashboard elements
+        display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_change_pct, final_prob, mean_price, current_price, ci_low, ci_high)
+    
+    with tab1:
+        # Distribution of final prices
+        fig1 = create_price_distribution_plot(ensemble, target_price)
+        
+        # Update figure for terminal theme
+        fig1.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            title_font=dict(color='#e6f3ff'),
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+        )
+        
+        st.plotly_chart(fig1, use_container_width=True)
+        
+    with tab2:
+        # Model comparison bar chart
+        fig2 = create_model_comparison_plot(ensemble, target_price)
+        
+        # Update figure for terminal theme
+        fig2.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            title_font=dict(color='#e6f3ff'),
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+        )
+        
+        st.plotly_chart(fig2, use_container_width=True)
+        
+    with tab3:
+        # Confidence intervals by model
+        fig3 = create_confidence_interval_plot(ensemble, target_price)
+        
+        # Update figure for terminal theme
+        fig3.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            title_font=dict(color='#e6f3ff'),
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+        )
+        
+        st.plotly_chart(fig3, use_container_width=True)
+    
+    # Model weights
+    st.markdown(win95_header("Model Weights in Ensemble"), unsafe_allow_html=True)
+    model_weights_df = pd.DataFrame(
+        ensemble_result['model_ranking'], 
+        columns=["Model", "Weight (%)"]
+    )
+    st.dataframe(model_weights_df, use_container_width=True)
+
+def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_change_pct, final_prob, mean_price, current_price, ci_low, ci_high):
+    """Display dashboard gauges and summary"""
+    import plotly.graph_objects as go
+    
+    # Determine sentiment
+    if final_prob > 75:
+        sentiment = "Strongly Bullish"
+        sentiment_color = "#4a90e2"
+    elif final_prob > 55:
+        sentiment = "Moderately Bullish"
+        sentiment_color = "#6ab0ed"
+    elif final_prob > 45:
+        sentiment = "Neutral"
+        sentiment_color = "#808080"
+    elif final_prob > 25:
+        sentiment = "Moderately Bearish"
+        sentiment_color = "#8ab4f8"
+    else:
+        sentiment = "Strongly Bearish"
+        sentiment_color = "#2c5282"
+    
+    # Display sentiment
+    col_sent1, col_sent2 = st.columns([1, 2])
+    
+    with col_sent1:
+        # Create a gauge chart for sentiment
+        gauge = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = final_prob,
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': f"Outlook: {sentiment}", 'font': {'color': '#e6f3ff'}},
+            gauge = {
+                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': '#e6f3ff'},
+                'bar': {'color': sentiment_color},
+                'steps': [
+                    {'range': [0, 25], 'color': '#2f2f2f'},
+                    {'range': [25, 45], 'color': '#3f3f3f'},
+                    {'range': [45, 55], 'color': '#4f4f4f'},
+                    {'range': [55, 75], 'color': '#5f5f5f'},
+                    {'range': [75, 100], 'color': '#4a90e2'}
+                ],
+                'threshold': {
+                    'line': {'color': "#e6f3ff", 'width': 4},
+                    'thickness': 0.75,
+                    'value': final_prob
+                }
+            }
+        ))
+        
+        gauge.update_layout(
+            paper_bgcolor='#2f2f2f',
+            font={'color': '#e6f3ff'},
+            height=250
+        )
+        
+        st.plotly_chart(gauge, use_container_width=True)
+        
+        # Key insights box
+        st.markdown(f"""
+        <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f;">
+        <h3 style="color: #e6f3ff;">Key Insights</h3>
+        <ul style="color: #ffffff;">
+          <li><strong>Target Price:</strong> ${target_price:.2f}</li>
+          <li><strong>Current Price:</strong> ${current_price:.2f}</li>
+          <li><strong>Expected in {T:.1f} years:</strong> ${mean_price:.2f} ({price_change_pct:.1f}%)</li>
+          <li><strong>Probability of reaching target:</strong> {final_prob:.1f}%</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_sent2:
+        # Create a simplified forecast chart
+        all_final_prices = []
+        for result in ensemble.results.values():
+            all_final_prices.extend(result['final_prices'][:1000])  # Limit to 1000 per model
+        
+        # Create histogram with density curve
+        fig = px.histogram(
+            all_final_prices, 
+            nbins=50,
+            title=f"Price Forecast Distribution in {T:.1f} Years",
+            opacity=0.7,
+            histnorm='probability density',
+            color_discrete_sequence=['#e6f3ff']
+        )
+        
+        fig.add_vline(x=current_price, line_color='#ffffff', line_dash='solid', 
+                      annotation_text="Current", annotation_position="top right", 
+                      annotation_font=dict(color='#e6f3ff'))
+                      
+        fig.add_vline(x=target_price, line_color='#8ab4f8', line_dash='dash', 
+                      annotation_text="Target", annotation_position="top right",
+                      annotation_font=dict(color='#e6f3ff'))
+                      
+        fig.add_vline(x=mean_price, line_color='#6ab0ed', line_dash='solid', 
+                      annotation_text="Expected", annotation_position="top right",
+                      annotation_font=dict(color='#e6f3ff'))
+        
+        # Add confidence interval
+        fig.add_vrect(
+            x0=ci_low, x1=ci_high,
+            fillcolor="#4a90e2", opacity=0.25,
+            layer="below", line_width=0,
+            annotation_text="95% Confidence Interval",
+            annotation_position="bottom right",
+            annotation_font=dict(color='#e6f3ff')
+        )
+        
+        fig.update_layout(
+            paper_bgcolor='#2f2f2f',
+            plot_bgcolor='#2f2f2f',
+            font=dict(color='#ffffff'),
+            xaxis_title="Price ($)",
+            yaxis_title="Probability Density",
+            xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+            height=350
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Simplified model ranking and insights
+    st.markdown(win95_header("Model Insights"), unsafe_allow_html=True)
+    col_rank1, col_rank2 = st.columns(2)
+    
+    with col_rank1:
+        # Simple model weight ranking
+        model_weights = pd.DataFrame(
+            ensemble_result['model_ranking'][:5], 
+            columns=["Model", "Weight (%)"]
+        )
+        
+        st.markdown("<h3 style='color: #e6f3ff;'>Top 5 Models by Weight</h3>", unsafe_allow_html=True)
+        st.dataframe(model_weights, use_container_width=True, hide_index=True)
+        
+        # Risk assessment
+        risk_level = "High" if ensemble.stock_data.volatility > 0.3 else "Medium" if ensemble.stock_data.volatility > 0.15 else "Low"
+        risk_color = "#2c5282" if risk_level == "High" else "#8ab4f8" if risk_level == "Medium" else "#4a90e2"
+        
+        st.markdown("<h3 style='color: #e6f3ff;'>Risk Assessment</h3>", unsafe_allow_html=True)
+        st.markdown(f"<span style='color:{risk_color};font-weight:bold;font-size:20px;'>{risk_level} Risk</span> (Volatility: {ensemble.stock_data.volatility:.2f})", unsafe_allow_html=True)
+    
+    with col_rank2:
+        # Pass ensemble_result to the display_investment_summary function
+        display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high)
+
+def display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high):
+    """Display investment summary and recommendation"""
+    st.markdown("<h3 style='color: #e6f3ff;'>Investment Summary</h3>", unsafe_allow_html=True)
+    
+    # Generate a summary based on the analysis
+    if price_change_pct > 20:
+        growth_txt = "significant growth potential"
+    elif price_change_pct > 10:
+        growth_txt = "moderate growth potential"
+    elif price_change_pct > 0:
+        growth_txt = "slight growth potential"
+    elif price_change_pct > -10:
+        growth_txt = "slight downside risk"
+    else:
+        growth_txt = "significant downside risk"
+    
+    if final_prob > 70:
+        prob_txt = "high probability"
+    elif final_prob > 50:
+        prob_txt = "moderate probability"
+    elif final_prob > 30:
+        prob_txt = "low probability"
+    else:
+        prob_txt = "very low probability"
+    
+    # Summary text
+    summary = f"""
+    <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f; font-family: 'VT323', monospace;">
+    {ensemble.stock_data.ticker} shows {growth_txt} over the next {T:.1f} years, with a {prob_txt} ({final_prob:.1f}%) 
+    of reaching the target price of ${target_price:.2f}. The expected price is ${mean_price:.2f}, 
+    representing a {price_change_pct:.1f}% change from the current price of ${current_price:.2f}.
+    <br><br>
+    The 95% confidence interval ranges from ${ci_low:.2f} to ${ci_high:.2f}, indicating the range of 
+    likely outcomes based on our multi-model ensemble approach.
+    <br><br>
+    This forecast is based on an ensemble of {len(ensemble.models)} advanced financial models, with 
+    the most influential being {ensemble_result['model_ranking'][0][0]}.
+    </div>
+    """
+    
+    st.markdown(summary, unsafe_allow_html=True)
+    
+    # Investment recommendation
+    if final_prob > 60 and price_change_pct > 15:
+        recommendation = "Strong Buy"
+        rec_color = "#4a90e2"
+    elif final_prob > 50 and price_change_pct > 10:
+        recommendation = "Buy"
+        rec_color = "#6ab0ed"
+    elif final_prob > 40 and price_change_pct > 0:
+        recommendation = "Hold"
+        rec_color = "#808080"
+    elif final_prob > 30:
+        recommendation = "Reduce"
+        rec_color = "#8ab4f8"
+    else:
+        recommendation = "Sell"
+        rec_color = "#2c5282"
+    
+    st.markdown("<h3 style='color: #e6f3ff;'>Recommendation</h3>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align: center; border: 1px solid #e6f3ff; padding: 5px; background-color: #2f2f2f;'><span style='color:{rec_color};font-weight:bold;font-size:24px;'>{recommendation}</span></div>", unsafe_allow_html=True)
+
 def clear_analysis_results():
     """Clear analysis results when stock data changes."""
     # Clear prediction results
@@ -477,8 +984,6 @@ def clear_analysis_results():
         del st.session_state.target_price
     if 'T' in st.session_state:
         del st.session_state.T
-
-# ... rest of app.py file remains the same ...
 
 def main():
     """Main function to run the application"""
