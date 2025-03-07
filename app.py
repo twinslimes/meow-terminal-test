@@ -786,96 +786,131 @@ def main():
         display_homepage()
         return
     
+    # Debug info - add this to help identify where the issue might be
+    st.markdown("<div style='color: #e6f3ff; margin-bottom: 10px;'>DEBUG: Dashboard is loading...</div>", unsafe_allow_html=True)
+    
     # Get API keys
-    alpha_vantage_key, fred_api_key = get_api_keys()
+    try:
+        alpha_vantage_key, fred_api_key = get_api_keys()
+        st.markdown("<div style='color: #e6f3ff; margin-bottom: 10px;'>DEBUG: API keys loaded</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Error getting API keys: {e}")
+        alpha_vantage_key = "demo"
+        fred_api_key = "demo"
     
     # Sidebar for navigation
-    st.sidebar.markdown("<h1 style='color: #e6f3ff;'>Navigation</h1>", unsafe_allow_html=True)
-    
-    # All navigation options in a single dropdown
-    selected_section = st.sidebar.selectbox(
-        "Go to",
-        ["Stock Dashboard", "Day Trader", "Backtesting", "Stock Analysis", "Technical Indicators", "Fundamental Analysis"]
-    )
-    
-    # Return to homepage button
-    if st.sidebar.button("Return to Homepage"):
-        st.session_state.show_dashboard = False
-        st.rerun()
-    
-    # Sidebar for inputs (common across sections)
-    st.sidebar.markdown("<h2 style='color: #e6f3ff;'>Stock Selection</h2>", unsafe_allow_html=True)
-    
-    # Fake terminal prompt for stock ticker
-    st.sidebar.markdown("<span style='color: #e6f3ff;'>C:\\STOCKS\\> Enter ticker:</span>", unsafe_allow_html=True)
-    
-    # User inputs for stock ticker
-    ticker = st.sidebar.text_input("", value="AAPL", label_visibility="collapsed").upper()
-    # Store current ticker in session state for verification
-    st.session_state.current_ticker = ticker
-    
-    # Check if ticker has changed and clear analysis if needed
-    if 'last_analyzed_ticker' in st.session_state and st.session_state.last_analyzed_ticker != ticker:
-        clear_analysis_results()
-    
-    # Button to fetch data
-    if st.sidebar.button("Fetch Stock Data", use_container_width=True):
-        with st.spinner("Fetching data - Please wait..."):
-            # Clear previous analysis results when fetching new data
-            clear_analysis_results()
-            
-            # Initialize stock data for models
-            stock_data = StockData(ticker, alpha_vantage_key, fred_api_key)
-            stock_data.fetch_data()
-            
-            # Fetch additional data for analysis
-            additional_data = fetch_additional_stock_data(ticker)
-            
-            # Calculate technical indicators
-            if additional_data and 'history' in additional_data and not additional_data['history'].empty:
-                technical_indicators = calculate_technical_indicators(additional_data['history'])
-            else:
-                technical_indicators = None
-            
-            # Store in session state for later use
-            st.session_state.stock_data = stock_data
-            st.session_state.additional_data = additional_data
-            st.session_state.technical_indicators = technical_indicators
-            st.session_state.last_analyzed_ticker = ticker
-            
-            st.sidebar.success(f"Data for {ticker} fetched successfully!")
-            # Force refresh to reflect new data
+    try:
+        st.sidebar.markdown("<h1 style='color: #e6f3ff;'>Navigation</h1>", unsafe_allow_html=True)
+        
+        # All navigation options in a single dropdown
+        selected_section = st.sidebar.selectbox(
+            "Go to",
+            ["Stock Dashboard", "Day Trader", "Backtesting", "Stock Analysis", "Technical Indicators", "Fundamental Analysis"]
+        )
+        
+        # Return to homepage button
+        if st.sidebar.button("Return to Homepage"):
+            st.session_state.show_dashboard = False
             st.rerun()
+        
+        # Sidebar for inputs (common across sections)
+        st.sidebar.markdown("<h2 style='color: #e6f3ff;'>Stock Selection</h2>", unsafe_allow_html=True)
+        
+        # Fake terminal prompt for stock ticker
+        st.sidebar.markdown("<span style='color: #e6f3ff;'>C:\\STOCKS\\> Enter ticker:</span>", unsafe_allow_html=True)
+        
+        # User inputs for stock ticker
+        ticker = st.sidebar.text_input("", value="AAPL", label_visibility="collapsed").upper()
+        # Store current ticker in session state for verification
+        st.session_state.current_ticker = ticker
+        
+        # Check if ticker has changed and clear analysis if needed
+        if 'last_analyzed_ticker' in st.session_state and st.session_state.last_analyzed_ticker != ticker:
+            clear_analysis_results()
+        
+        # Button to fetch data
+        if st.sidebar.button("Fetch Stock Data", use_container_width=True):
+            with st.spinner("Fetching data - Please wait..."):
+                # Clear previous analysis results when fetching new data
+                clear_analysis_results()
+                
+                try:
+                    # Initialize stock data for models
+                    stock_data = StockData(ticker, alpha_vantage_key, fred_api_key)
+                    stock_data.fetch_data()
+                    
+                    # Fetch additional data for analysis
+                    additional_data = fetch_additional_stock_data(ticker)
+                    
+                    # Calculate technical indicators
+                    if additional_data and 'history' in additional_data and not additional_data['history'].empty:
+                        technical_indicators = calculate_technical_indicators(additional_data['history'])
+                    else:
+                        technical_indicators = None
+                    
+                    # Store in session state for later use
+                    st.session_state.stock_data = stock_data
+                    st.session_state.additional_data = additional_data
+                    st.session_state.technical_indicators = technical_indicators
+                    st.session_state.last_analyzed_ticker = ticker
+                    
+                    st.sidebar.success(f"Data for {ticker} fetched successfully!")
+                    # Force refresh to reflect new data
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error fetching data: {e}")
+                    import traceback
+                    st.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Terminal breadcrumb path at top
+        current_path = f"C:\\> STOCKS\\{ticker}\\{selected_section.upper().replace(' ', '_')}"
+        st.markdown(f"<div style='color: #e6f3ff; font-family: monospace; margin-bottom: 10px;'>{current_path}</div>", unsafe_allow_html=True)
+        
+        # Display the appropriate content based on the selection
+        try:
+            if selected_section == "Stock Dashboard":
+                # If we have analysis results for the current ticker, show them
+                if ('ensemble_result' in st.session_state and 
+                    'analysis_ticker' in st.session_state and 
+                    st.session_state.analysis_ticker == ticker):
+                    display_prediction_results()
+                else:
+                    # Otherwise show the basic dashboard
+                    display_basic_dashboard(ticker)
+                    
+            elif selected_section == "Day Trader":
+                display_day_trader_section(ticker)
+                
+            elif selected_section == "Backtesting":
+                display_backtesting_section(ticker)
+                    
+            elif selected_section == "Stock Analysis":
+                display_stock_analysis_section(ticker)
+                
+            elif selected_section == "Technical Indicators":
+                display_technical_indicators_section(ticker)
+                
+            elif selected_section == "Fundamental Analysis":
+                display_fundamental_analysis_section(ticker)
+        except Exception as e:
+            st.error(f"Error displaying {selected_section}: {e}")
+            import traceback
+            st.error(f"Traceback: {traceback.format_exc()}")
     
-    # Terminal breadcrumb path at top
-    current_path = f"C:\\> STOCKS\\{ticker}\\{selected_section.upper().replace(' ', '_')}"
-    st.markdown(f"<div style='color: #e6f3ff; font-family: monospace; margin-bottom: 10px;'>{current_path}</div>", unsafe_allow_html=True)
-    
-    # Display the appropriate content based on the selection
-    if selected_section == "Stock Dashboard":
-        # If we have analysis results for the current ticker, show them
-        if ('ensemble_result' in st.session_state and 
-            'analysis_ticker' in st.session_state and 
-            st.session_state.analysis_ticker == ticker):
-            display_prediction_results()
-        else:
-            # Otherwise show the basic dashboard
-            display_basic_dashboard(ticker)
-            
-    elif selected_section == "Day Trader":
-        display_day_trader_section(ticker)
+    except Exception as e:
+        st.error(f"Error setting up dashboard: {e}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
         
-    elif selected_section == "Backtesting":
-        display_backtesting_section(ticker)
-            
-    elif selected_section == "Stock Analysis":
-        display_stock_analysis_section(ticker)
+        # Fall back to a simple dashboard if everything else fails
+        st.title("Meow Terminal")
+        st.markdown("**Debug Mode - Dashboard Failed to Load**")
+        st.write("There was an error setting up the dashboard components. Please check the error message above.")
         
-    elif selected_section == "Technical Indicators":
-        display_technical_indicators_section(ticker)
-        
-    elif selected_section == "Fundamental Analysis":
-        display_fundamental_analysis_section(ticker)
+        # Add a button to return to the homepage
+        if st.button("Return to Homepage"):
+            st.session_state.show_dashboard = False
+            st.rerun()
 
 # This is the entry point of the script
 if __name__ == "__main__":
