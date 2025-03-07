@@ -771,6 +771,99 @@ if 'bottom_performers' not in st.session_state:
         {'ticker': 'WMT', 'change': -1.2, 'volume': '12.8M'}
     ]
 
+# Alternative localStorage implementation using cookies
+if 'data_persisted' not in st.session_state:
+    st.session_state.data_persisted = False
+
+def save_data_to_cookies():
+    """Save data to cookies as an alternative to localStorage"""
+    data_to_save = {
+        'watchlist': st.session_state.watchlist,
+        'secondary_watchlist': st.session_state.secondary_watchlist,
+        'layout': st.session_state.layout,
+        'refresh_rate': st.session_state.refresh_rate,
+        'current_theme': st.session_state.current_theme
+    }
+    
+    # Serialize to JSON
+    json_data = json.dumps(data_to_save)
+    
+    # Use JavaScript to set a cookie instead of localStorage
+    st.markdown(f"""
+    <script>
+        try {{
+            // Set cookie to expire in 365 days
+            let expiryDate = new Date();
+            expiryDate.setTime(expiryDate.getTime() + (365 * 24 * 60 * 60 * 1000));
+            document.cookie = "meowDashboardData={json_data}; expires=" + expiryDate.toUTCString() + "; path=/; SameSite=Strict";
+            console.log('Data saved to cookie');
+        }} catch (error) {{
+            console.error('Error saving to cookie:', error);
+        }}
+    </script>
+    """, unsafe_allow_html=True)
+    
+    st.session_state.data_persisted = True
+
+def load_data_from_cookies():
+    """Try to load data from cookies"""
+    if st.session_state.data_persisted:
+        return  # Already tried to load
+    
+    st.markdown("""
+    <script>
+        try {
+            function getCookie(name) {
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) return parts.pop().split(';').shift();
+                return null;
+            }
+            
+            const savedData = getCookie('meowDashboardData');
+            if (savedData) {
+                // Send to backend via query params
+                const dataToSend = encodeURIComponent(savedData);
+                const url = new URL(window.location.href);
+                url.searchParams.set('cookie_data', dataToSend);
+                window.history.replaceState(null, '', url.toString());
+                
+                // Force refresh to apply the URL change
+                window.location.reload();
+            }
+        } catch (error) {
+            console.error('Error loading from cookies:', error);
+        }
+    </script>
+    """, unsafe_allow_html=True)
+    
+    # Try to get data from URL parameters
+    query_params = st.experimental_get_query_params()
+    if 'cookie_data' in query_params:
+        try:
+            saved_data_json = query_params['cookie_data'][0]
+            saved_data = json.loads(saved_data_json)
+            
+            # Update session state with saved data
+            if 'watchlist' in saved_data:
+                st.session_state.watchlist = saved_data['watchlist']
+            if 'secondary_watchlist' in saved_data:
+                st.session_state.secondary_watchlist = saved_data['secondary_watchlist']
+            if 'layout' in saved_data:
+                st.session_state.layout = saved_data['layout']
+            if 'refresh_rate' in saved_data:
+                st.session_state.refresh_rate = saved_data['refresh_rate']
+            if 'current_theme' in saved_data:
+                st.session_state.current_theme = saved_data['current_theme']
+            
+            # Clear the query params to avoid loading the same data multiple times
+            st.experimental_set_query_params()
+            
+        except Exception as e:
+            st.error(f"Error loading saved data: {e}")
+    
+    st.session_state.data_persisted = True
+
 # Functions to fetch data
 def fetch_stock_data(ticker_list):
     """Fetch current stock data for watchlist"""
