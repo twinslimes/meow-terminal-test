@@ -4,13 +4,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import warnings
-import requests
-import re
-import json
-import time
-from datetime import datetime, timedelta
-import threading
-import yfinance as yf
 
 # Import local modules
 from data_utils import get_api_keys, fetch_additional_stock_data, calculate_technical_indicators
@@ -26,9 +19,6 @@ from models import (
     RegimeSwitchingModel, QuasiMonteCarloModel, VarianceGammaModel, 
     NeuralSDEModel, StockModelEnsemble, HAS_ARCH
 )
-
-# Polygon API key
-POLYGON_API_KEY = "9skphQ6G7_rESW6iTNJDIAycT9gncpje"
 
 # Suppress warnings in the UI
 warnings.filterwarnings("ignore")
@@ -234,50 +224,6 @@ terminal_css = """
     .stCheckbox label p {
         color: #e6f3ff !important; /* Muted white-blue for checkboxes */
     }
-
-    /* News item styling */
-    .news-item {
-        background-color: #2f2f2f;
-        border: 1px solid #e6f3ff;
-        padding: 10px;
-        margin-bottom: 10px;
-        font-family: 'VT323', monospace;
-    }
-    
-    .news-ticker {
-        font-weight: bold;
-        color: #e6f3ff;
-        font-size: 16px;
-    }
-    
-    .news-headline {
-        font-size: 18px;
-        margin: 5px 0;
-        color: #ffffff;
-        text-decoration: none;
-    }
-    
-    .news-headline:hover {
-        text-decoration: underline;
-        cursor: pointer;
-    }
-    
-    .news-outcome {
-        font-weight: bold;
-        font-size: 16px;
-    }
-    
-    .news-positive {
-        color: #4CAF50;
-    }
-    
-    .news-negative {
-        color: #F44336;
-    }
-    
-    .news-neutral {
-        color: #FFC107;
-    }
 </style>
 """
 
@@ -375,147 +321,6 @@ def run_prediction_analysis(ticker, T, dt, M, target_price):
     
     st.success("Analysis completed!")
     display_prediction_results()
-
-def predict_news_outcome(title):
-    """Simple sentiment analysis to predict outcome based on headline"""
-    positive_words = ['rise', 'jump', 'gain', 'surge', 'up', 'high', 'growth', 'profit', 
-                     'beat', 'exceed', 'positive', 'bullish', 'rally', 'soar']
-    negative_words = ['fall', 'drop', 'decline', 'down', 'low', 'loss', 'miss', 'below', 
-                     'negative', 'bearish', 'plunge', 'sink', 'crash', 'struggle']
-    
-    title_lower = title.lower()
-    
-    positive_count = sum(1 for word in positive_words if re.search(r'\b' + word + r'\b', title_lower))
-    negative_count = sum(1 for word in negative_words if re.search(r'\b' + word + r'\b', title_lower))
-    
-    if positive_count > negative_count:
-        return "📈 Positive", "news-positive"
-    elif negative_count > positive_count:
-        return "📉 Negative", "news-negative"
-    else:
-        return "⟷ Neutral", "news-neutral"
-
-def display_news_dashboard_section(ticker):
-    """Display the news dashboard section"""
-    st.markdown(win95_header(f"Market News Dashboard for {ticker}"), unsafe_allow_html=True)
-    
-    # Info text
-    st.markdown("<p>View the latest market news and sentiment analysis related to your selected stock.</p>", unsafe_allow_html=True)
-    
-    # Controls row
-    col1, col2 = st.columns([1, 4])
-    
-    with col1:
-        # Filter options
-        news_filter = st.selectbox(
-            "Filter by:",
-            ["All News", "Positive Only", "Negative Only", "Neutral Only"]
-        )
-    
-    with col2:
-        # Refresh button
-        if st.button("🔄 Refresh News", use_container_width=True):
-            st.rerun()
-    
-    # Get yesterday's date
-    yesterday = datetime.now() - timedelta(days=1)
-    date_from = yesterday.strftime("%Y-%m-%d")
-    
-    # Fetch news from Polygon API
-    with st.spinner("Fetching latest market news..."):
-        try:
-            # If a specific ticker is selected, use it to filter news
-            if ticker and ticker != "":
-                url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&order=desc&limit=10&sort=published_utc&apiKey={POLYGON_API_KEY}"
-            else:
-                url = f"https://api.polygon.io/v2/reference/news?limit=10&order=desc&sort=published_utc&apiKey={POLYGON_API_KEY}"
-            
-            response = requests.get(url)
-            data = response.json()
-            
-            if response.status_code == 200 and 'results' in data:
-                news_items = data['results']
-                
-                if not news_items:
-                    st.info("No news articles found for the selected ticker.")
-                else:
-                    # Process and display each news item
-                    for news in news_items:
-                        # Get sentiment prediction
-                        outcome_text, outcome_class = predict_news_outcome(news.get('title', ''))
-                        
-                        # Filter based on user selection
-                        if (news_filter == "Positive Only" and outcome_class != "news-positive") or \
-                           (news_filter == "Negative Only" and outcome_class != "news-negative") or \
-                           (news_filter == "Neutral Only" and outcome_class != "news-neutral"):
-                            continue
-                        
-                        # Get tickers for this news item
-                        tickers = news.get('tickers', [])
-                        ticker_str = ", ".join(tickers) if tickers else "N/A"
-                        
-                        # Format date
-                        published_date = datetime.fromisoformat(news.get('published_utc', '').replace('Z', '+00:00'))
-                        formatted_date = published_date.strftime("%Y-%m-%d %H:%M UTC")
-                        
-                        # Display news item in Windows 95 style box
-                        st.markdown(f"""
-                        <div class="news-item">
-                            <div class="news-ticker">Tickers: {ticker_str}</div>
-                            <a href="{news.get('article_url', '#')}" target="_blank" class="news-headline">{news.get('title', 'No headline available')}</a>
-                            <div>Published: {formatted_date}</div>
-                            <div class="news-outcome {outcome_class}">{outcome_text}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-            else:
-                st.error(f"Error fetching news: {data.get('error', 'Unknown error')}")
-                
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-    
-    # Additional info at the bottom
-    with st.expander("About News Sentiment Analysis"):
-        st.markdown("""
-        The news sentiment analysis uses a simple keyword-based approach to predict market impact:
-        
-        - **Positive**: Headlines containing terms like "rise," "gain," "beat," "bullish," etc.
-        - **Negative**: Headlines containing terms like "fall," "drop," "miss," "bearish," etc.
-        - **Neutral**: Headlines without clear positive or negative sentiment indicators
-        
-        This is a simplified analysis and should not be used as the sole basis for investment decisions.
-        """)
-
-def display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high):
-    """Display investment summary section with key metrics and recommendations"""
-    # Determine investment recommendation based on probability
-    if final_prob > 75:
-        recommendation = "Strong Buy"
-        rec_color = "#4CAF50"  # Green
-    elif final_prob > 60:
-        recommendation = "Buy"
-        rec_color = "#8BC34A"  # Light Green
-    elif final_prob > 45:
-        recommendation = "Hold"
-        rec_color = "#FFC107"  # Amber
-    elif final_prob > 30:
-        recommendation = "Sell"
-        rec_color = "#FF9800"  # Orange
-    else:
-        recommendation = "Strong Sell"
-        rec_color = "#F44336"  # Red
-    
-    # Calculate projected annual return
-    annual_return = (mean_price / current_price) ** (1/T) - 1 if T > 0 else 0
-    annual_return_pct = annual_return * 100
-    
-    st.markdown(f"""
-    <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f;">
-    <h3 style="color: #e6f3ff;">Investment Summary</h3>
-    <p style="color: #ffffff;">Recommendation: <span style="color:{rec_color};font-weight:bold;">{recommendation}</span></p>
-    <p style="color: #ffffff;">Projected Annual Return: <span style="font-weight:bold;">{annual_return_pct:.2f}%</span></p>
-    <p style="color: #ffffff;">Expected Price Change: <span style="font-weight:bold;">{price_change_pct:.2f}%</span> over {T:.1f} years</p>
-    </div>
-    """, unsafe_allow_html=True)
 
 def display_prediction_results():
     """Display prediction results in main dashboard"""
@@ -668,6 +473,53 @@ def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_c
     col_sent1, col_sent2 = st.columns([1, 2])
     
     with col_sent1:
+        # Create a gauge chart for sentiment
+        gauge = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = final_prob,
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': f"Outlook: {sentiment}", 'font': {'color': '#e6f3ff'}},
+            gauge = {
+                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': '#e6f3ff'},
+                'bar': {'color': sentiment_color},
+                'steps': [
+                    {'range': [0, 25], 'color': '#2f2f2f'},
+                    {'range': [25, 45], 'color': '#3f3f3f'},
+                    {'range': [45, 55], 'color': '#4f4f4f'},
+                    {'range': [55, 75], 'color': '#5f5f5f'},
+                    {'range': [75, 100], 'color': '#4a90e2'}
+                ],
+                'threshold': {
+                    'line': {'color': "#e6f3ff", 'width': 4},
+                    'thickness': 0.75,
+                    'value': final_prob
+                }
+            }
+        ))
+        
+        gauge.update_layout(
+            paper_bgcolor='#2f2f2f',
+            font={'color': '#e6f3ff'},
+            height=250
+        )
+        
+        st.plotly_chart(gauge, use_container_width=True)
+        
+        # Key insights box
+        st.markdown("""
+        <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f;">
+        <h3 style="color: #e6f3ff;">Key Insights</h3>
+        <ul style="color: #ffffff;">
+          <li><strong>Target Price:</strong> ${:.2f}</li>
+          <li><strong>Current Price:</strong> ${:.2f}</li>
+          <li><strong>Expected in {:.1f} years:</strong> ${:.2f} ({:.1f}%)</li>
+          <li><strong>Probability of reaching target:</strong> {:.1f}%</li>
+        </ul>
+        </div>
+        """.format(target_price, current_price, T, mean_price, price_change_pct, final_prob), 
+        unsafe_allow_html=True)
+    
+    with col_sent2:
         # Create a simplified forecast chart
         all_final_prices = []
         for result in ensemble.results.values():
@@ -740,72 +592,291 @@ def display_dashboard_gauges(ensemble, ensemble_result, T, target_price, price_c
         st.markdown(f"<span style='color:{risk_color};font-weight:bold;font-size:20px;'>{risk_level} Risk</span> (Volatility: {ensemble.stock_data.volatility:.2f})", unsafe_allow_html=True)
     
     with col_rank2:
-        # Display investment summary
+        # Pass ensemble_result to the display_investment_summary function
         display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high)
+
+def display_investment_summary(ensemble, ensemble_result, T, target_price, final_prob, mean_price, current_price, price_change_pct, ci_low, ci_high):
+    """Display investment summary and recommendation"""
+    st.markdown("<h3 style='color: #e6f3ff;'>Investment Summary</h3>", unsafe_allow_html=True)
+    
+    # Generate a summary based on the analysis
+    if price_change_pct > 20:
+        growth_txt = "significant growth potential"
+    elif price_change_pct > 10:
+        growth_txt = "moderate growth potential"
+    elif price_change_pct > 0:
+        growth_txt = "slight growth potential"
+    elif price_change_pct > -10:
+        growth_txt = "slight downside risk"
+    else:
+        growth_txt = "significant downside risk"
+    
+    if final_prob > 70:
+        prob_txt = "high probability"
+    elif final_prob > 50:
+        prob_txt = "moderate probability"
+    elif final_prob > 30:
+        prob_txt = "low probability"
+    else:
+        prob_txt = "very low probability"
+    
+    # Summary text
+    summary = f"""
+    <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f; font-family: 'VT323', monospace;">
+    {ensemble.stock_data.ticker} shows {growth_txt} over the next {T:.1f} years, with a {prob_txt} ({final_prob:.1f}%) 
+    of reaching the target price of ${target_price:.2f}. The expected price is ${mean_price:.2f}, 
+    representing a {price_change_pct:.1f}% change from the current price of ${current_price:.2f}.
+    <br><br>
+    The 95% confidence interval ranges from ${ci_low:.2f} to ${ci_high:.2f}, indicating the range of 
+    likely outcomes based on our multi-model ensemble approach.
+    <br><br>
+    This forecast is based on an ensemble of {len(ensemble.models)} advanced financial models, with 
+    the most influential being {ensemble_result['model_ranking'][0][0]}.
+    </div>
+    """
+    
+    st.markdown(summary, unsafe_allow_html=True)
+    
+    # Investment recommendation
+    if final_prob > 60 and price_change_pct > 15:
+        recommendation = "Strong Buy"
+        rec_color = "#4a90e2"
+    elif final_prob > 50 and price_change_pct > 10:
+        recommendation = "Buy"
+        rec_color = "#6ab0ed"
+    elif final_prob > 40 and price_change_pct > 0:
+        recommendation = "Hold"
+        rec_color = "#808080"
+    elif final_prob > 30:
+        recommendation = "Reduce"
+        rec_color = "#8ab4f8"
+    else:
+        recommendation = "Sell"
+        rec_color = "#2c5282"
+    
+    st.markdown("<h3 style='color: #e6f3ff;'>Recommendation</h3>", unsafe_allow_html=True)
+    st.markdown(f"<div style='text-align: center; border: 1px solid #e6f3ff; padding: 5px; background-color: #2f2f2f;'><span style='color:{rec_color};font-weight:bold;font-size:24px;'>{recommendation}</span></div>", unsafe_allow_html=True)
+
+def display_basic_dashboard(ticker):
+    """Display basic dashboard with current price and chart"""
+    if 'stock_data' in st.session_state and st.session_state.stock_data:
+        stock_data = st.session_state.stock_data
         
-        # Gauge chart for sentiment
-        gauge = go.Figure(go.Indicator(
-            mode = "gauge+number",
-            value = final_prob,
-            domain = {'x': [0, 1], 'y': [0, 1]},
-            title = {'text': f"Outlook: {sentiment}", 'font': {'color': '#e6f3ff'}},
-            gauge = {
-                'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': '#e6f3ff'},
-                'bar': {'color': sentiment_color},
-                'steps': [
-                    {'range': [0, 25], 'color': '#2f2f2f'},
-                    {'range': [25, 45], 'color': '#3f3f3f'},
-                    {'range': [45, 55], 'color': '#4f4f4f'},
-                    {'range': [55, 75], 'color': '#5f5f5f'},
-                    {'range': [75, 100], 'color': '#4a90e2'}
-                ],
-                'threshold': {
-                    'line': {'color': "#e6f3ff", 'width': 4},
-                    'thickness': 0.75,
-                    'value': final_prob
-                }
-            }
-        ))
+        # Verify we're displaying data for the correct ticker
+        if stock_data.ticker != ticker:
+            st.warning(f"Displaying data for {stock_data.ticker}, but the current selected ticker is {ticker}. Please fetch data for {ticker}.")
+            return
         
-        gauge.update_layout(
-            paper_bgcolor='#2f2f2f',
-            font={'color': '#e6f3ff'},
-            height=250
+        # Display current price and basic metrics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(label="Current Price", value=f"${stock_data.price:.2f}")
+        
+        with col2:
+            st.metric(label="Annual Volatility", value=f"{stock_data.volatility:.2f}")
+        
+        with col3:
+            # Calculate implied cost of equity
+            implied_coe = stock_data.risk_free_rate + stock_data.volatility * 0.5
+            st.metric(label="Implied Cost of Equity", value=f"{implied_coe*100:.2f}%")
+        
+        # Show historical price chart
+        if stock_data.historical_data is not None:
+            hist_data = stock_data.historical_data
+            if 'Close' in hist_data.columns:
+                fig = px.line(hist_data['Close'], title=f"{ticker} Historical Price")
+                
+                # Update figure for terminal theme
+                fig.update_layout(
+                    paper_bgcolor='#2f2f2f',
+                    plot_bgcolor='#2f2f2f',
+                    font=dict(color='#ffffff'),
+                    title_font=dict(color='#e6f3ff'),
+                    xaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff'),
+                    yaxis=dict(gridcolor='#4a90e2', linecolor='#e6f3ff', zerolinecolor='#e6f3ff')
+                )
+                fig.update_traces(line_color='#e6f3ff')
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+        # Prediction model parameters
+        st.markdown(win95_header("Price Prediction"), unsafe_allow_html=True)
+        st.markdown("<p style='color: #ffffff;'>Use the controls below to set up and run a price prediction analysis.</p>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            T = st.slider("Time Horizon (years)", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+            st.session_state.T = T  # Store in session state for later use
+        
+        with col2:
+            # Get current price from session
+            current_price = stock_data.price
+            
+            # Target price input
+            target_price = st.number_input(
+                "Target Price ($)", 
+                min_value=float(current_price * 0.5), 
+                max_value=float(current_price * 2.0), 
+                value=float(current_price * 1.2),
+                step=0.01
+            )
+        
+        # Calculate implied return
+        implied_return = (target_price / current_price - 1) * 100
+        annual_return = ((target_price / current_price) ** (1/T) - 1) * 100
+        
+        st.metric(
+            label="Implied Total Return", 
+            value=f"{implied_return:.2f}%",
+            delta=f"{annual_return:.2f}% annually"
         )
         
-        st.plotly_chart(gauge, use_container_width=True)
+        # Model selection
+        st.markdown(win95_header("Select Models to Include"), unsafe_allow_html=True)
         
-        # Key insights box
-        st.markdown("""
-        <div style="border: 1px solid #e6f3ff; padding: 10px; background-color: #2f2f2f;">
-        <h3 style="color: #e6f3ff;">Key Insights</h3>
-        <ul style="color: #ffffff;">
-          <li><strong>Target Price:</strong> ${:.2f}</li>
-          <li><strong>Current Price:</strong> ${:.2f}</li>
-          <li><strong>Expected in {:.1f} years:</strong> ${:.2f} ({:.1f}%)</li>
-          <li><strong>Probability of reaching target:</strong> {:.1f}%</li>
-        </ul>
-        </div>
-        """.format(target_price, current_price, T, mean_price, price_change_pct, final_prob), 
-        unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            global use_gbm, use_advanced_gbm, use_qmc
+            use_gbm = st.checkbox("Geometric Brownian Motion", value=True)
+            use_advanced_gbm = st.checkbox("Advanced GBM", value=True)
+            use_qmc = st.checkbox("Quasi Monte Carlo", value=True)
+        
+        with col2:
+            global use_jump, use_heston, use_garch
+            use_jump = st.checkbox("Jump Diffusion", value=True)
+            use_heston = st.checkbox("Heston Stochastic Volatility", value=True)
+            use_garch = st.checkbox("GARCH Volatility", value=HAS_ARCH)
+        
+        with col3:
+            global use_regime, use_vg, use_neural
+            use_regime = st.checkbox("Regime Switching", value=True)
+            use_vg = st.checkbox("Variance Gamma", value=True)
+            use_neural = st.checkbox("Neural SDE", value=True)
+        
+        # Advanced settings
+        with st.expander("Advanced Settings", expanded=False):
+            M = st.slider("Number of Simulations", min_value=1000, max_value=10000, value=5000, step=1000)
+            dt = st.select_slider(
+                "Time Step", 
+                options=[1/252, 1/52, 1/26, 1/12], 
+                value=1/12, 
+                format_func=lambda x: f"{int(1/x)} times per year"
+            )
+        
+        # Button to run simulations
+        st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+        if st.button("Run Probability Analysis", key="run_analysis", use_container_width=True):
+            run_prediction_analysis(ticker, T, dt, M, target_price)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-# Main application function
 def main():
-    # Display terminal CSS
+    """Main function to run the application"""
+    # Apply terminal CSS
     st.markdown(terminal_css, unsafe_allow_html=True)
     
-    # Check if this is the first time loading
+    # Initialize session state to track if dashboard should be shown
     if 'show_dashboard' not in st.session_state:
         st.session_state.show_dashboard = False
     
-    # Show homepage or dashboard based on state
+    # Check if we should show homepage or dashboard
     if not st.session_state.show_dashboard:
         display_homepage()
-    else:
-        # Main dashboard content here
-        st.title("Meow Terminal Dashboard")
-        st.markdown("Your dashboard content goes here")
+        return
+    
+    # Get API keys
+    alpha_vantage_key, fred_api_key = get_api_keys()
+    
+    # Sidebar for navigation
+    st.sidebar.markdown("<h1 style='color: #e6f3ff;'>Navigation</h1>", unsafe_allow_html=True)
+    
+    # All navigation options in a single dropdown
+    selected_section = st.sidebar.selectbox(
+        "Go to",
+        ["Stock Dashboard", "Day Trader", "Backtesting", "Stock Analysis", "Technical Indicators", "Fundamental Analysis"]
+    )
+    
+    # Return to homepage button
+    if st.sidebar.button("Return to Homepage"):
+        st.session_state.show_dashboard = False
+        st.rerun()
+    
+    # Sidebar for inputs (common across sections)
+    st.sidebar.markdown("<h2 style='color: #e6f3ff;'>Stock Selection</h2>", unsafe_allow_html=True)
+    
+    # Fake terminal prompt for stock ticker
+    st.sidebar.markdown("<span style='color: #e6f3ff;'>C:\\STOCKS\\> Enter ticker:</span>", unsafe_allow_html=True)
+    
+    # User inputs for stock ticker
+    ticker = st.sidebar.text_input("", value="AAPL", label_visibility="collapsed").upper()
+    # Store current ticker in session state for verification
+    st.session_state.current_ticker = ticker
+    
+    # Check if ticker has changed and clear analysis if needed
+    if 'last_analyzed_ticker' in st.session_state and st.session_state.last_analyzed_ticker != ticker:
+        clear_analysis_results()
+    
+    # Button to fetch data
+    if st.sidebar.button("Fetch Stock Data", use_container_width=True):
+        with st.spinner("Fetching data - Please wait..."):
+            # Clear previous analysis results when fetching new data
+            clear_analysis_results()
+            
+            # Initialize stock data for models
+            stock_data = StockData(ticker, alpha_vantage_key, fred_api_key)
+            stock_data.fetch_data()
+            
+            # Fetch additional data for analysis
+            additional_data = fetch_additional_stock_data(ticker)
+            
+            # Calculate technical indicators
+            if additional_data and 'history' in additional_data and not additional_data['history'].empty:
+                technical_indicators = calculate_technical_indicators(additional_data['history'])
+            else:
+                technical_indicators = None
+            
+            # Store in session state for later use
+            st.session_state.stock_data = stock_data
+            st.session_state.additional_data = additional_data
+            st.session_state.technical_indicators = technical_indicators
+            st.session_state.last_analyzed_ticker = ticker
+            
+            st.sidebar.success(f"Data for {ticker} fetched successfully!")
+            # Force refresh to reflect new data
+            st.rerun()
+    
+    # Terminal breadcrumb path at top
+    current_path = f"C:\\> STOCKS\\{ticker}\\{selected_section.upper().replace(' ', '_')}"
+    st.markdown(f"<div style='color: #e6f3ff; font-family: monospace; margin-bottom: 10px;'>{current_path}</div>", unsafe_allow_html=True)
+    
+    # Display the appropriate content based on the selection
+    if selected_section == "Stock Dashboard":
+        # If we have analysis results for the current ticker, show them
+        if ('ensemble_result' in st.session_state and 
+            'analysis_ticker' in st.session_state and 
+            st.session_state.analysis_ticker == ticker):
+            display_prediction_results()
+        else:
+            # Otherwise show the basic dashboard
+            display_basic_dashboard(ticker)
+            
+    elif selected_section == "Day Trader":
+        display_day_trader_section(ticker)
+        
+    elif selected_section == "Backtesting":
+        display_backtesting_section(ticker)
+            
+    elif selected_section == "Stock Analysis":
+        display_stock_analysis_section(ticker)
+        
+    elif selected_section == "Technical Indicators":
+        display_technical_indicators_section(ticker)
+        
+    elif selected_section == "Fundamental Analysis":
+        display_fundamental_analysis_section(ticker)
 
-# Run the main function
+# This is the entry point of the script
 if __name__ == "__main__":
     main()
