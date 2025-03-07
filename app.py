@@ -285,7 +285,7 @@ def display_homepage():
         st.rerun()
     
     # YouTube Video below button
-    st.video("https://www.youtube.com/watch?v=l9QTwRn_vmc&t=1s&ab_channel=twinslimes")  # User's actual video
+    st.video("https://www.youtube.com/watch?v=ATiSMolEOdg&ab_channel=twinslimes")  # User's actual video
     
     # Footer
     st.markdown("""
