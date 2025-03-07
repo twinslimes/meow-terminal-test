@@ -11,18 +11,35 @@ import warnings
 import threading
 import requests
 from io import StringIO
+import sys
+import importlib
 
-# Import local modules
-from data_utils import calculate_technical_indicators, generate_technical_signals
-from models import (StockData, GeometricBrownianMotion, JumpDiffusionModel, 
-                   HestonModel, VarianceGammaModel, QuasiMonteCarloModel)
+# Import local modules with forced reload
+try:
+    import data_utils
+    importlib.reload(data_utils)
+    from data_utils import calculate_technical_indicators, generate_technical_signals
+    
+    import models
+    importlib.reload(models)
+    from models import (StockData, GeometricBrownianMotion, JumpDiffusionModel, 
+                      HestonModel, VarianceGammaModel, QuasiMonteCarloModel)
+except ImportError as e:
+    st.error(f"Error importing modules: {e}")
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
+# Module version tracking (to confirm the correct version is loaded)
+__version__ = "2.1.0"  # Increment this when you update the file
+__updated__ = "2025-03-07"  # Today's date
+
 # Initialize session state keys for persistent storage
-def init_session_state():
+def init_day_trader_state():
     """Initialize session state variables if they don't exist."""
+    # Version indicator to verify proper loading
+    st.session_state.day_trader_version = __version__
+    
     if 'live_chart_data' not in st.session_state:
         st.session_state.live_chart_data = None
     if 'last_update_time' not in st.session_state:
@@ -56,7 +73,7 @@ def init_session_state():
     if 'refresh_interval' not in st.session_state:
         st.session_state.refresh_interval = 60  # seconds
     if 'selected_timeframe' not in st.session_state:
-        st.session_state.selected_timeframe = '5m'  # Default to 5m instead of 1m for better data availability
+        st.session_state.selected_timeframe = '5m'  # Default to 5m for better data availability
     if 'day_trader_ticker' not in st.session_state:
         st.session_state.day_trader_ticker = None
     if 'refresh_thread' not in st.session_state:
@@ -97,7 +114,7 @@ def get_risk_free_rate():
         print(f"Error fetching risk-free rate: {e}")
         return st.session_state.risk_free_rate
 
-def get_appropriate_data_range(timeframe):
+def get_timeframe_data_range(timeframe):
     """Calculate appropriate data range based on timeframe."""
     # Map timeframes to appropriate data range in days
     # More granular timeframes need shorter periods to avoid huge datasets
@@ -112,7 +129,7 @@ def get_appropriate_data_range(timeframe):
     
     return timeframe_ranges.get(timeframe, 5)  # Default to 5 days if timeframe not recognized
 
-def get_default_prediction_horizon(timeframe):
+def get_prediction_horizon(timeframe):
     """Get default prediction horizon based on timeframe."""
     # Map timeframes to appropriate prediction horizons
     # Shorter timeframes need fewer steps
@@ -127,7 +144,7 @@ def get_default_prediction_horizon(timeframe):
     
     return timeframe_horizons.get(timeframe, 15)  # Default to 15 steps if timeframe not recognized
 
-def fetch_live_data(ticker, timeframe='5m', custom_days=None):
+def fetch_day_trader_data(ticker, timeframe='5m', custom_days=None):
     """Fetch live intraday data for the selected ticker with improved error handling."""
     try:
         with st.spinner(f"Fetching live data for {ticker}..."):
@@ -147,7 +164,7 @@ def fetch_live_data(ticker, timeframe='5m', custom_days=None):
             if custom_days is not None:
                 days = custom_days
             else:
-                days = get_appropriate_data_range(timeframe)
+                days = get_timeframe_data_range(timeframe)
             
             # Update the stored data range
             st.session_state.data_range_days = days
@@ -243,9 +260,9 @@ def fetch_live_data(ticker, timeframe='5m', custom_days=None):
             st.session_state.day_trader_ticker = ticker
             
             # Update default prediction horizon based on new timeframe
-            if st.session_state.custom_horizon == get_default_prediction_horizon(st.session_state.selected_timeframe):
+            if st.session_state.custom_horizon == get_prediction_horizon(st.session_state.selected_timeframe):
                 # Only update if user hasn't manually changed it
-                st.session_state.custom_horizon = get_default_prediction_horizon(timeframe)
+                st.session_state.custom_horizon = get_prediction_horizon(timeframe)
             
             # Fetch current risk-free rate
             current_rate = get_risk_free_rate()
@@ -904,7 +921,7 @@ def auto_refresh_data(ticker, interval_seconds=60):
     while not stop_event.is_set():
         try:
             # Fetch new data
-            new_data = fetch_live_data(ticker, st.session_state.selected_timeframe)
+            new_data = fetch_day_trader_data(ticker, st.session_state.selected_timeframe)
             
             # Generate new predictions
             if new_data is not None and not new_data.empty:
@@ -924,10 +941,13 @@ def auto_refresh_data(ticker, interval_seconds=60):
 
 def display_day_trader_section(ticker):
     """Display simplified and powerful day trader dashboard."""
-    st.header(f"Live Day Trading Analysis")
+    st.header(f"Live Day Trading Analysis (v{__version__})")
+    
+    # Verify fresh load of this module
+    st.markdown(f'<div style="display:none">Day Trader Module v{__version__} ({__updated__})</div>', unsafe_allow_html=True)
     
     # Initialize session state variables
-    init_session_state()
+    init_day_trader_state()
     
     # Check if ticker has changed
     if st.session_state.day_trader_ticker != ticker and st.session_state.day_trader_ticker is not None:
@@ -963,7 +983,7 @@ def display_day_trader_section(ticker):
             # Clear data to force refresh with new timeframe
             st.session_state.live_chart_data = None
             # Update default prediction horizon
-            st.session_state.custom_horizon = get_default_prediction_horizon(timeframe)
+            st.session_state.custom_horizon = get_prediction_horizon(timeframe)
         
         # Data range control
         data_range = st.slider(
@@ -976,7 +996,7 @@ def display_day_trader_section(ticker):
         
         # Fetch data button
         if st.button("Fetch Live Data", key="fetch_data", use_container_width=True):
-            data = fetch_live_data(ticker, timeframe, custom_days=data_range)
+            data = fetch_day_trader_data(ticker, timeframe, custom_days=data_range)
             if data is not None and not data.empty:
                 # Generate initial predictions
                 generate_ensemble_prediction(ticker)
@@ -1308,3 +1328,24 @@ def display_day_trader_section(ticker):
                     with col:
                         st.metric(label="Insufficient Data", value="N/A")
                 st.warning(f"Only {len(data)} data points available. Need at least 14 for metrics.")
+
+    # Add version check to force reloading if needed
+    if st.session_state.day_trader_version != __version__:
+        st.warning(f"Day trader module version mismatch: {st.session_state.day_trader_version} vs {__version__}. Refreshing...")
+        time.sleep(1)
+        st.session_state.day_trader_version = __version__
+        st.experimental_rerun()
+
+# This is for testing the module directly
+if __name__ == "__main__":
+    st.set_page_config(page_title="Day Trader Test", layout="wide")
+    init_day_trader_state()
+    
+    st.title("Day Trader Module Tester")
+    ticker = st.text_input("Enter ticker", "AAPL")
+    
+    if st.button("Test Module"):
+        display_day_trader_section(ticker)
+    
+    st.write(f"Module version: {__version__}")
+    st.write(f"Last updated: {__updated__}")
